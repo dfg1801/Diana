@@ -1,0 +1,11 @@
+﻿Column name: ,Definition
+HI Name,"Name in olelo Hawaii, with tone markings"
+Common Name,"Common english name, if applicable"
+Sci name,Scientific name
+Alt sci name,Alternate scientific name
+Islands located,List of islands included in current day range
+Diet,General diet
+Detailed diet,"Detailed dietary notes, copied form the info source"
+Status (extinct/extant),Conservation status (extinct/extant)
+Info src,Source of information on this row
+on AVONET? ,"Y (yes,  found on avonet) or N (no, not found on avonet)"
