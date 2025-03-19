@@ -336,26 +336,75 @@ p4 <- ggplot(scaled_morpho_dist, aes(x = scaled_p_dist, y = avg_morpho_dist)) +
        ) + 
   theme_bw()
 plot(p4)
+
+sig <- sd(scaled_morpho_dist$avg_morpho_dist) # saving standard deviation of this plot
 ```
 
 ## Discussion
 
 ### Null model of trait evolution
 
-I was really hoping to be able to plot a sort of simulated null model of trait evolution to compare the data to. Couldn't figure it out, but I did find some code to generate this data: 
+Amazingly, there is an R function to do this within phytools :0
 
-```{r, null_evolution}
-t <- 0:100  # time
-sig2 <- 0.37577955
-nsim <- 100
-X <- matrix(rnorm(n = nsim * (length(t) - 1), sd = sqrt(sig2)), nsim, length(t) - 
-    1)
-X <- cbind(rep(0, nsim), t(apply(X, 1, cumsum)))
-plot(t, X[1, ], xlab = "time", ylab = "phenotype", ylim = c(-20, 20), type = "l")
-apply(X[2:nsim, ], 1, function(x, t) lines(t, x), t = t)
+```{r}
+# simulate Brownian evolution on tree, just do avg of all morpho diff--------
+x <- fastBM(tree, sig2 = sig^2, internal = TRUE)
+phenogram(tree, x, spread.labels = TRUE, spread.cost = c(1, 0)) # visualize Brownian evolution on a tree, spread cost just makes sure labels don't overlap
+
+#store data in df, clean up a bit----------
+morpho_sim <- data.frame(x)
+  
+morpho_sim <- morpho_sim %>%
+  mutate(species = rownames(morpho_sim)) %>%
+  filter(!str_detect(species, "[0-9]")) %>% # only select rows of tip sp
+  mutate(species = str_to_lower(species))
+
+# now make the pairwise distances----------
+sim_matrix=dist(morpho_sim)
+sim_matrix=as.matrix(sim_matrix, labels=TRUE)
+
+
+cleaned_sim_dist <- sim_matrix %>%
+  melt() %>%
+  filter(Var1 != Var2) %>%
+  mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
+  mutate(Var2 = str_to_lower(Var2)) %>%
+  mutate(pair = paste(Var1, ",", Var2))
+
+# other phylo dist had some stuff removed to match the avonet data so remake -------
+scaled_phylo_dist_full <- phylo_dist %>% 
+  melt() %>% #turn matrix into a dataframe
+  mutate(Var1 = as.character(Var1)) %>% # these were factors, turn them into characters bc I don't need the factor value and so I can work with it easier
+  mutate(Var2 = as.character(Var2)) %>%
+  filter(Var1 != Var2) %>%
+  mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
+  mutate(Var2 = str_to_lower(Var2)) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>%
+  mutate(scaled_p_dist = abs(standardize(value))) # scale and abs distances
+
+#now put the two together ----------
+scaled_sim_dist <- cleaned_sim_dist %>%
+   mutate(scaled_dist = abs(standardize(value))) %>%
+  left_join(scaled_phylo_dist_full, by = join_by(pair)) %>%
+  select(pair, scaled_dist, scaled_p_dist)
 ```
 
-**Note that I directly copy+pasted this from a [phytools exercise](http://phytools.org/eqg/Exercise_4.1/)**
+Whew, ok now time to plot this data! 
+
+```{r, brownian_dist}
+ggplot(scaled_sim_dist, aes(x = scaled_p_dist, y = scaled_dist)) +
+  geom_point() +
+  geom_smooth() +
+  labs(title = "Pairwise distances",
+       subtitle = "Simulated morphological distance vs phylogenetic distance",
+       caption = "all data transformed via z-score normalization", 
+       x = "Phylogenetic distance", 
+       y = "Average morphological distance"
+       ) + 
+  theme_bw()
+```
+
+**Code for sim found in this [phytools exercise](http://phytools.org/eqg/Exercise_4.1/)**
 
 This null model is based on Brownian motion, a common null model for trait evolution:  
 z(t)∼N(z(0),σ^2^t)  
