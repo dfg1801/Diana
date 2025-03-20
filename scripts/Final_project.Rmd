@@ -54,18 +54,6 @@ tree <- read.newick(tree_name)
 plot(tree) # test that the tree read in correctly
 ```
 
-### Functions
-
-I'm going to make my own function to normalize and scale my data so the math that I am doing is transparent :)
-
-```{r}
-standardize <- function(x){ 
-  z <- (x - mean(x)) / sd(x) 
-  return( z) 
-} 
-```
-
-  
 
 # Cleaning
 
@@ -137,7 +125,8 @@ beak_length <- morpho %>%
   filter(common_name != "Akepa") %>% # akepa has no data so remove it from the matrix
   select(common_name, beak_length_culmen) %>%
   group_by(common_name) %>%
-  summarise(mean_length_culmen = mean(beak_length_culmen)) 
+  summarise(mean_length_culmen = mean(beak_length_culmen)) %>%
+  mutate(mean_length_culmen = scale(mean_length_culmen)) # scale measurements before calculating distances
 
 # now make the pairwise distances
 length_matrix=dist(beak_length)
@@ -149,7 +138,9 @@ cleaned_length_dist <- length_matrix %>%
   filter(Var1 != Var2) %>% # remove the comparisons btween the same sp (inherently will be 0), so they dont skew scaling
   mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
   mutate(Var2 = str_to_lower(Var2)) %>%
-  mutate(pair = paste(Var1, ",", Var2))
+  rename(length_dist = value) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", ""))
 head(cleaned_length_dist) # to check that this all went smoothly
 ```
 Amazing :) Now do the same thing with beak width and depth! 
@@ -166,7 +157,8 @@ beak_width <- morpho %>%
   filter(common_name != "Akepa") %>% # akepa has no data so remove it from the matrix
   select(common_name, beak_width) %>%
   group_by(common_name) %>%
-  summarise(mean_width = mean(beak_width)) 
+  summarise(mean_width = mean(beak_width)) %>%
+  mutate(mean_width = scale(mean_width))
 
 # now make the pairwise distances
 width_matrix=dist(beak_width)
@@ -178,7 +170,9 @@ cleaned_width_dist <- width_matrix %>%
   filter(Var1 != Var2) %>%
   mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
   mutate(Var2 = str_to_lower(Var2)) %>%
-  mutate(pair = paste(Var1, ",", Var2))
+  rename(width_dist = value) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", ""))
 ```
 
 #### Beak Depth
@@ -193,7 +187,8 @@ beak_depth <- morpho %>%
   filter(common_name != "Akepa") %>% # akepa has no data so remove it from the matrix,
   select(common_name, beak_depth) %>%
   group_by(common_name) %>%
-  summarise(mean_depth = mean(beak_depth)) 
+  summarise(mean_depth = mean(beak_depth)) %>%
+  mutate(mean_depth = scale(mean_depth))
 
 # now make the pairwise distances
 depth_matrix=dist(beak_depth)
@@ -205,8 +200,9 @@ cleaned_depth_dist <- depth_matrix %>%
   filter(Var1 != Var2) %>%
   mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
   mutate(Var2 = str_to_lower(Var2)) %>%
-  mutate(pair = paste(Var1, ",", Var2))
-
+  rename(depth_dist = value) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", ""))
 ```
 
 
@@ -218,8 +214,6 @@ phylo_dist <- cophenetic.phylo(tree) # make pairwise matrix of phylogenetic dist
 
 cleaned_phylo_dist <- phylo_dist %>%
   melt() %>% #turn matrix into a dataframe
-  mutate(Var1 = as.character(Var1)) %>% # these were factors, turn them into characters bc I don't need the factor value and so I can work with it easier
-  mutate(Var2 = as.character(Var2)) %>%
   filter(Var1 != Var2) %>%
   filter(Var1 != "Akepa") %>% # no morpho data for Akepa/Hawaii Akepa, remove
   filter(Var2 != "Akepa") %>%
@@ -227,48 +221,52 @@ cleaned_phylo_dist <- phylo_dist %>%
   filter(Var2 != "Maui_Amakihi") %>%
   mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
   mutate(Var2 = str_to_lower(Var2)) %>%
-  mutate(pair = paste(Var1, ",", Var2))
+  rename(phylo_dist = value) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", ""))
 
 ```
 
-### Scaling
 
-Now to perform Z-score normalization on all of this data! Then, I will make sure that I only get absolute distances, and join the phylogenetic distance to all of the morphological distances.
-
+### Joining data 
 ```{r}
-
-scaled_phylo_dist <- cleaned_phylo_dist %>%
-  mutate(scaled_p_dist = abs(standardize(value))) # absolute the values since I don't care about distance, I only care about size of effect. 
-  
-
+# length
 scaled_length_dist <- cleaned_length_dist %>%
-  mutate(scaled_dist = abs(standardize(value))) %>%
-  left_join(scaled_phylo_dist, by = join_by(pair)) %>%
-  select(pair, scaled_dist, scaled_p_dist) 
+  left_join(cleaned_phylo_dist, by = join_by(pair)) %>%
+  mutate(A_standard = pmin(Var1.x, Var2.x), B_standard = pmax(Var1.x, Var2.x)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  select(pair, length_dist, phylo_dist)
 
+# width
 scaled_width_dist <- cleaned_width_dist %>%
-  mutate(scaled_dist = abs(standardize(value))) %>%
-  left_join(scaled_phylo_dist, by = join_by(pair)) %>%
-  select(pair, scaled_dist, scaled_p_dist)
+  left_join(cleaned_phylo_dist, by = join_by(pair)) %>%
+  mutate(A_standard = pmin(Var1.x, Var2.x), B_standard = pmax(Var1.x, Var2.x)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% 
+  select(pair, width_dist, phylo_dist) 
 
+# depth
 scaled_depth_dist <- cleaned_depth_dist %>%
-   mutate(scaled_dist = abs(standardize(value))) %>%
-  left_join(scaled_phylo_dist, by = join_by(pair)) %>%
-  select(pair, scaled_dist, scaled_p_dist)
-  
+  left_join(cleaned_phylo_dist, by = join_by(pair)) %>%
+  mutate(A_standard = pmin(Var1.x, Var2.x), B_standard = pmax(Var1.x, Var2.x)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% 
+  select(pair, depth_dist, phylo_dist)
 
 ```
+
 
 #### All morpho
 
 This is not the right way to do this but just for fun: let's make a version of these distance dataframes that averages all the morphology in one :)
 ```{r}
-scaled_morpho_dist <- scaled_length_dist %>%
-  left_join(scaled_width_dist, by = join_by(pair)) %>%
-  left_join(scaled_depth_dist, by = join_by(pair)) %>%
-  select(pair, scaled_dist, scaled_dist.x, scaled_dist.y, scaled_p_dist) %>%
-  mutate(avg_morpho_dist = rowMeans(select(.,starts_with("scaled_dist")))) %>%
-  select(pair, avg_morpho_dist, scaled_p_dist)
+scaled_morpho_dist <- cleaned_length_dist %>%
+  left_join(cleaned_width_dist, by = join_by(pair)) %>%
+  left_join(cleaned_depth_dist, by = join_by(pair)) %>%
+  left_join(cleaned_phylo_dist, by = join_by(pair)) %>%
+  mutate(A_standard = pmin(Var1.x, Var2.x), B_standard = pmax(Var1.x, Var2.x)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>%
+  select(pair, length_dist, depth_dist, width_dist, phylo_dist) %>%
+  mutate(avg_morpho_dist = rowMeans(select(.,ends_with("h_dist")))) %>%
+  select(pair, avg_morpho_dist, phylo_dist)
 
 ```
 
@@ -280,10 +278,8 @@ Matching the phylo and morpho datasets was quite frustrating, not only did the p
 But now that we cleaned that up so diligently above, lets move on to plotting! 
 
 ```{r, beak_length}
-sdL <- sd(scaled_length_dist$scaled_dist)
-p1 <- ggplot(scaled_length_dist, aes(x = scaled_p_dist, y = scaled_dist)) +
+p1 <- ggplot(scaled_length_dist, aes(x = phylo_dist, y = length_dist)) +
   geom_point() +
-  geom_smooth() +
   labs(title = "Pairwise distances",
        subtitle = "Beak length difference vs phylogenetic distance",
        caption = "all data transformed via z-score normalization", 
@@ -296,9 +292,8 @@ plot(p1)
 ```
 
 ```{r, beak_width}
-p2 <- ggplot(scaled_width_dist, aes(x = scaled_p_dist, y = scaled_dist)) +
+p2 <- ggplot(scaled_width_dist, aes(x = phylo_dist, y = width_dist)) +
   geom_point() +
-  geom_smooth() +
   labs(title = "Pairwise distances",
        subtitle = "Beak width difference vs phylogenetic distance", 
        caption = "all data transformed via z-score normalization", 
@@ -310,9 +305,8 @@ plot(p2)
 ```
 
 ```{r, beak_depth}
-p3 <- ggplot(scaled_depth_dist, aes(x = scaled_p_dist, y = scaled_dist)) +
+p3 <- ggplot(scaled_depth_dist, aes(x = phylo_dist, y = depth_dist)) +
   geom_point() +
-  geom_smooth() +
   labs(title = "Pairwise distances",
        subtitle = "Beak depth difference vs phylogenetic distance",
        caption = "all data transformed via z-score normalization", 
@@ -324,10 +318,8 @@ plot(p3)
 ```
 
 ```{r, avg_morpho}
-p4 <- ggplot(scaled_morpho_dist, aes(x = scaled_p_dist, y = avg_morpho_dist)) +
+p4 <- ggplot(scaled_morpho_dist, aes(x = phylo_dist, y = avg_morpho_dist)) +
   geom_point() +
-  geom_smooth() +
-  xlim(0, 3.1) +
   labs(title = "Pairwise distances",
        subtitle = "Averaged beak length, depth, and width difference vs phylogenetic distance",
        caption = "all data transformed via z-score normalization", 
@@ -369,32 +361,35 @@ cleaned_sim_dist <- sim_matrix %>%
   filter(Var1 != Var2) %>%
   mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
   mutate(Var2 = str_to_lower(Var2)) %>%
-  mutate(pair = paste(Var1, ",", Var2))
+  rename(sim_dist = value) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", ""))
 
 # other phylo dist had some stuff removed to match the avonet data so remake -------
-scaled_phylo_dist_full <- phylo_dist %>% 
+phylo_dist <- cophenetic.phylo(tree) # make pairwise matrix of phylogenetic distances
+
+cleaned_phylo_dist_full <- phylo_dist %>%
   melt() %>% #turn matrix into a dataframe
-  mutate(Var1 = as.character(Var1)) %>% # these were factors, turn them into characters bc I don't need the factor value and so I can work with it easier
-  mutate(Var2 = as.character(Var2)) %>%
   filter(Var1 != Var2) %>%
   mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
   mutate(Var2 = str_to_lower(Var2)) %>%
-  mutate(pair = paste(Var1, ",", Var2)) %>%
-  mutate(scaled_p_dist = abs(standardize(value))) # scale and abs distances
+  rename(phylo_dist = value) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", ""))
 
 #now put the two together ----------
 scaled_sim_dist <- cleaned_sim_dist %>%
-   mutate(scaled_dist = abs(standardize(value))) %>%
-  left_join(scaled_phylo_dist_full, by = join_by(pair)) %>%
-  select(pair, scaled_dist, scaled_p_dist)
+  left_join(cleaned_phylo_dist_full, by = join_by(pair)) %>%
+  mutate(A_standard = pmin(Var1.x, Var2.x), B_standard = pmax(Var1.x, Var2.x)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% 
+  select(pair, sim_dist, phylo_dist)
 ```
 
 Whew, ok now time to plot this data! 
 
 ```{r, brownian_dist}
-ggplot(scaled_sim_dist, aes(x = scaled_p_dist, y = scaled_dist)) +
+ggplot(scaled_sim_dist, aes(x = phylo_dist, y = sim_dist)) +
   geom_point() +
-  geom_smooth() +
   labs(title = "Pairwise distances",
        subtitle = "Simulated morphological distance vs phylogenetic distance",
        caption = "all data transformed via z-score normalization", 
