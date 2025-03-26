@@ -22,7 +22,7 @@ require(Hmisc)
 `r Hmisc::hidingTOC(hidden=TRUE,levels=0)`
 
 Hi! Welcome to my final project page. Some background info: for birds, there is evidence of beak morphology being highly related to feeding ecology. The HI honeycreepers are an adaptive radiation with crazy variation in beak morphology, which leads people to believe that their 
-But just looking at the birds' beaks and diets, it seems like many similar feeding ecologies still yield a lot of different beak shapes. I wanted to see if there is correlation between difference in beak morphology and phylogenetic distance, maybe hinting at the interaction between a species' lineage and their feeding ecology shaping their morphology.  
+But just looking at the birds' beaks and diets, it seems like many similar feeding ecologies still yield a lot of different beak shapes. I wanted to see if there is correlation between difference in beak morphology and phylogenetic distance, maybe hinting at the interaction between a species' lineage and their feeding ecology shaping their morphology. Are we able to predict species' morphological differences based on their phylogenetic difference? What does this pattern look like? 
 My morphological data is taken from [AVONET](https://opentraits.org/datasets/avonet.html). The landmarks for the measurements are written in the data dictionary, but here is a figure from their paper which visually shows the measurement methods. Note number 1, 3, and 4 in particular. 
 
 ![](C:/Users/diana/OneDrive/Desktop/Homeworks nd sylabus/Data science class/Diana_Final/data/Measurement_diagram.PNG)
@@ -38,6 +38,8 @@ library(janitor)
 library(reshape2) # for working with matrices
 library(phytools) # for working with phylo data
 library(patchwork)
+library(car)
+library(ggResidpanel)
 ```
 
 ### Load data
@@ -96,13 +98,13 @@ So after all of that, we can finally have a nice table with all of our honeycree
 morpho
 ```
 
-# Analysis
+# Analysis/Results
 
 My end goal for this analysis is to create scaled and normalilzed regressions of the pairwise phylogenetic and morphometric distances between each species in order to see if there is some relationship between the two which differs from the null. If I had more time, I would definetly add more statistical rigor but for now I am just trying to get things working. 
 
 ## Matrix making
 
-But before comaring the pairwise  distances, we first have to generate them. First, I will average all the specimens within a species, then I will calculate pairwise distances. 
+But before comparing the pairwise  distances, we first have to generate them. First, I will average all the specimens within a species, then I will calculate pairwise distances. 
 
 Luckily there is a function (stats::dist()) which does this. As well as (phytools::cophenetic.phylo()), which finds distances based on branch lengths from phylogenetic data. Once I make the matrices, then I melt them into a dataframe, with the important columns being the pair of names and the other being the distance between the pair. Whew! 
 
@@ -140,7 +142,7 @@ cleaned_length_dist <- length_matrix %>%
   mutate(Var2 = str_to_lower(Var2)) %>%
   rename(length_dist = value) %>%
   mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
-  mutate(pair = str_replace_all(pair, " ", ""))
+  mutate(pair = str_replace_all(pair, " ", "")) # remove all white spaces
 head(cleaned_length_dist) # to check that this all went smoothly
 ```
 Amazing :) Now do the same thing with beak width and depth! 
@@ -228,7 +230,7 @@ cleaned_phylo_dist <- phylo_dist %>%
 ```
 
 
-### Joining data 
+#### Joining phylo data to morpho data
 ```{r}
 # length
 scaled_length_dist <- cleaned_length_dist %>%
@@ -256,7 +258,7 @@ scaled_depth_dist <- cleaned_depth_dist %>%
 
 #### All morpho
 
-This is not the right way to do this but just for fun: let's make a version of these distance dataframes that averages all the morphology in one :)
+This is not the right way to do this but just for now: let's make a version of these distance dataframes that averages all the morphology in one :)
 ```{r}
 scaled_morpho_dist <- cleaned_length_dist %>%
   left_join(cleaned_width_dist, by = join_by(pair)) %>%
@@ -271,15 +273,18 @@ scaled_morpho_dist <- cleaned_length_dist %>%
 ```
 
 
-## Plotting
+## Modeling + Plotting
 
 Matching the phylo and morpho datasets was quite frustrating, not only did the phylogeny use an inconsistent mix of common and 'ōlelo names, the capitalization was inconsistent and not all species were represented in both datasets. Leading to one of my biggest time sinks, figuring out why all the pairwise distance dataframes were different lengths. T_T  
 
-But now that we cleaned that up so diligently above, lets move on to plotting! 
+But now that we cleaned that up so diligently above, lets move on to plotting! In addition, let's see how a basic linear model fits the data for funsies lol
+
+### Beak length
 
 ```{r, beak_length}
-p1 <- ggplot(scaled_length_dist, aes(x = phylo_dist, y = length_dist)) +
+ggplot(scaled_length_dist, aes(x = phylo_dist, y = length_dist)) +
   geom_point() +
+  geom_smooth(method = 'lm') +
   labs(title = "Pairwise distances",
        subtitle = "Beak length difference vs phylogenetic distance",
        caption = "all data transformed via z-score normalization", 
@@ -287,13 +292,22 @@ p1 <- ggplot(scaled_length_dist, aes(x = phylo_dist, y = length_dist)) +
        y = "Morphological distance"
        ) + 
   theme_bw()
-plot(p1)
-  
 ```
 
+#### Model making
+```{r}
+length_mod <- lm(length_dist~phylo_dist, data = scaled_length_dist)
+Anova(length_mod)
+resid_panel(length_mod, plots = c("resid", "qq", "lev", "hist"))
+```
+
+This one really doesn't have any correlation with phylo dist ^^' 
+
+### Beak width
 ```{r, beak_width}
-p2 <- ggplot(scaled_width_dist, aes(x = phylo_dist, y = width_dist)) +
+ggplot(scaled_width_dist, aes(x = phylo_dist, y = width_dist)) +
   geom_point() +
+  geom_smooth(method = "lm") +
   labs(title = "Pairwise distances",
        subtitle = "Beak width difference vs phylogenetic distance", 
        caption = "all data transformed via z-score normalization", 
@@ -301,12 +315,22 @@ p2 <- ggplot(scaled_width_dist, aes(x = phylo_dist, y = width_dist)) +
        y = "Morphological distance"
        ) + 
   theme_bw()
-plot(p2)
 ```
 
+#### Model making
+```{r}
+width_mod <- lm(width_dist~phylo_dist, data = scaled_width_dist)
+Anova(width_mod)
+resid_panel(width_mod, plots = c("resid", "qq", "lev", "hist"))
+```
+
+Woah, phylo dist does have a pretty strong positive relationship with beak width! 
+
+### Beak depth
 ```{r, beak_depth}
-p3 <- ggplot(scaled_depth_dist, aes(x = phylo_dist, y = depth_dist)) +
+ggplot(scaled_depth_dist, aes(x = phylo_dist, y = depth_dist)) +
   geom_point() +
+  geom_smooth(method = 'lm') +
   labs(title = "Pairwise distances",
        subtitle = "Beak depth difference vs phylogenetic distance",
        caption = "all data transformed via z-score normalization", 
@@ -314,12 +338,23 @@ p3 <- ggplot(scaled_depth_dist, aes(x = phylo_dist, y = depth_dist)) +
        y = "Morphological distance"
        ) + 
   theme_bw()
-plot(p3)
 ```
 
+#### Model making
+```{r}
+depth_mod <- lm(depth_dist~phylo_dist, data = scaled_depth_dist)
+Anova(depth_mod)
+resid_panel(depth_mod, plots = c("resid", "qq", "lev", "hist"))
+```
+
+
+The phylo dist of 6 has a wierd gap, this seems to be because the maui parrotbill, compared to all the sp ~6 phylo dist away (amakihis), has high morphological beak depth dist. Meanwhile, these sp compared to it's sister, the akipolaau has lower morpho dist to everyone. Makes sense considering the high beak depth of the maui parrotbill's compared to all the amakihis.
+
+### Average of morpho
 ```{r, avg_morpho}
-p4 <- ggplot(scaled_morpho_dist, aes(x = phylo_dist, y = avg_morpho_dist)) +
+ggplot(scaled_morpho_dist, aes(x = phylo_dist, y = avg_morpho_dist)) +
   geom_point() +
+  geom_smooth(method = "lm") +
   labs(title = "Pairwise distances",
        subtitle = "Averaged beak length, depth, and width difference vs phylogenetic distance",
        caption = "all data transformed via z-score normalization", 
@@ -327,20 +362,28 @@ p4 <- ggplot(scaled_morpho_dist, aes(x = phylo_dist, y = avg_morpho_dist)) +
        y = "Average morphological distance"
        ) + 
   theme_bw()
-plot(p4)
 
 sig <- sd(scaled_morpho_dist$avg_morpho_dist) # saving standard deviation of this plot
+```
+
+### Model making
+I will make a model to see which measurement (if any) has the best explanatory power for 
+```{r}
+avg_mod <- lm(avg_morpho_dist~phylo_dist, data = scaled_morpho_dist)
+Anova(avg_mod)
+resid_panel(avg_mod, plots = c("resid", "qq", "lev", "hist"))
 ```
 
 ## Discussion
 
 ### Null model of trait evolution
 
-Amazingly, there is an R function to do this within phytools :0
+Conveniently, there is an R function to do this within phytools :0
+I am just simulating one trait - the average morpho 
 
 ```{r}
 # simulate Brownian evolution on tree, just do avg of all morpho diff--------
-x <- fastBM(tree, sig2 = sig^2, internal = TRUE)
+x <- fastBM(tree, sig2 = sig^2, internal = TRUE) # sig from mean morpho above
 phenogram(tree, x, spread.labels = TRUE, spread.cost = c(1, 0)) # visualize Brownian evolution on a tree, spread cost just makes sure labels don't overlap
 
 #store data in df, clean up a bit----------
@@ -385,11 +428,23 @@ scaled_sim_dist <- cleaned_sim_dist %>%
   select(pair, sim_dist, phylo_dist)
 ```
 
+#### Model making
+```{r}
+sim_mod <- lm(sim_dist~phylo_dist, data = scaled_sim_dist)
+Anova(sim_mod)
+resid_panel(sim_mod, plots = c("resid", "qq", "lev", "hist"))
+```
+
+As expected, the basic linear model fits this simulated data well and shows significant effect of phylo dist on morpho dist. Also, the residual panels show good fit. 
+
+#### Plotting
+
 Whew, ok now time to plot this data! 
 
 ```{r, brownian_dist}
 ggplot(scaled_sim_dist, aes(x = phylo_dist, y = sim_dist)) +
   geom_point() +
+  geom_smooth(method = 'lm') +
   labs(title = "Pairwise distances",
        subtitle = "Simulated morphological distance vs phylogenetic distance",
        caption = "all data transformed via z-score normalization", 
@@ -405,14 +460,41 @@ This null model is based on Brownian motion, a common null model for trait evolu
 z(t)∼N(z(0),σ^2^t)  
 where z is a trait value at time (t). N indicates it will follow a normal distribution, and σ^2^ is variance. 
 
-From what I can understand of brownian motion, if I were to plot the absolute of these simulated results on a my pairwise distance graphs, it would look like an area,starting at 0,0 and increasing in morphological distance as phylogenetic distance increases. 
+In a perfect world, my data would be more evely distributed along the whole range of phylogenetic distances and therefore the confidence intervals displayed would follow a pattern of being smaller at lower phylo dist, and wider at higher dist. 
 <!-- Simply put, this model says assumes no evolutionary direction. It assumes that pairwise morphological distance will increase in variance as pairwise phylogenetic distance increases, following a normal distribution. The mean morphological distance at any point in time will remain 0. I will calculate the variance from the data. '  -->
 
-### Any findings?
+### Conclusion
+
+```{r}
+combined <- ggplot(scaled_sim_dist, aes(x = phylo_dist, y = sim_dist)) +
+  geom_point() +
+  geom_smooth(method = 'lm') + 
+  ggplot(scaled_morpho_dist, aes(x = phylo_dist, y = avg_morpho_dist)) +
+  geom_point() +
+  geom_smooth(method = "lm") + 
+  ggplot(scaled_length_dist, aes(x = phylo_dist, y = length_dist)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  ggplot(scaled_width_dist, aes(x = phylo_dist, y = width_dist)) +
+  geom_point() +
+  geom_smooth(method = "lm")+ 
+  ggplot(scaled_depth_dist, aes(x = phylo_dist, y = depth_dist)) +
+  geom_point() +
+  geom_smooth(method = 'lm')
+
+combined &
+  ylim (0, 8)
+  
+```
+
 
 If speciation happens most when species find new, unoccupied niche space and then adapt to it (ecological release), it would show up on my above graphs as a generically negative correlation, with smaller phylogenetic distance yielding high morphological distance, and higher phylogenetic distance yielding possibly lower morphological distance (with greater variance).  
-It doesn't seem like my results were consistent with a null model of evolution. The results are muddled, with seemingly little effect of phylogenetic distance on morphological distance. Perhaps this is caused by the influence of both ecological release and genetic drift (biological theory behind null model). 
-This all would need to be verified with statistical tests if I were to do this for realsies though. In terms of improving my current results, I have two ideas:  
+
+The real-life data definetly has a tighter spread compared to the BM-modeled data, and generally seems to have a shallower slope. 
+
+The results are muddled, with seemingly little effect of phylogenetic distance on morphological distance, positive or negative. The null model shows a significant effect of phylo dist on morpho dist, as well as beak depth. Idk ^^'
+
+In terms of improving my current results, I have two ideas:  
 
 1. I think I just need more resolution. So more data points. Adding species (especially extinct ones) to the phylogeny and morphology datasets would probably help tremendously.  
-2. Making a more comprehensive measure of beak shape would be nice. Perhaps making a single measure that takes into account the beak length to the culmen, depth, width, and **curvature** of **both the upper and lower beak** would be a better approach. 
+2. Phylogenetic distance did show ability as a predictor for beak width, indicating that maybe certain beak dimensions do just follow basic brownian motion, while others are affected by ecological effects. To me, this indicates necessity to be able to capture more dimensions of beak variation (not just length, width, and depth) such as curvature, symmetry of upper and lower mandible, etc. 
