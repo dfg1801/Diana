@@ -40,6 +40,7 @@ library(phytools) # for working with phylo data
 library(patchwork)
 library(car)
 library(ggResidpanel)
+library(VGAM)
 ```
 
 ### Load data
@@ -381,6 +382,7 @@ resid_panel(avg_mod, plots = c("resid", "qq", "lev", "hist"))
 Conveniently, there is an R function to do this within phytools :0
 I am just simulating one trait - the average morpho 
 
+OLD SCRIPT: 
 ```{r}
 # simulate Brownian evolution on tree, just do avg of all morpho diff--------
 x <- fastBM(tree, sig2 = sig^2, internal = TRUE) # sig from mean morpho above
@@ -428,6 +430,28 @@ scaled_sim_dist <- cleaned_sim_dist %>%
   select(pair, sim_dist, phylo_dist)
 ```
 
+
+NEW: 
+``` {r}
+# trying vgam function to extract 
+#Quantiles corresponding to cumulative proportions of a distribution. E.g., the 95% quantile is the value for which 95% of the data will be smaller than that value.
+
+bm_val <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * sig^2))
+bm_morpho <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, morpho_dist = bm_val, pair = cleaned_phylo_dist$pair)
+
+ggplot(bm_morpho, aes(x = phylo_dist, y = morpho_dist)) +
+  geom_point() +
+  geom_line() +
+  geom_area(fill = "skyblue", alpha = .3) +
+  labs(title = "Pairwise distances",
+       subtitle = "Simulated morphological distance vs phylogenetic distance",
+       x = "Phylogenetic distance", 
+       y = "simulated morphological distance (95% quantile)"
+       ) + 
+  theme_bw()
+
+```
+
 #### Model making
 ```{r}
 sim_mod <- lm(sim_dist~phylo_dist, data = scaled_sim_dist)
@@ -466,21 +490,35 @@ In a perfect world, my data would be more evely distributed along the whole rang
 ### Conclusion
 
 ```{r}
-combined <- ggplot(scaled_sim_dist, aes(x = phylo_dist, y = sim_dist)) +
-  geom_point() +
-  geom_smooth(method = 'lm') + 
-  ggplot(scaled_morpho_dist, aes(x = phylo_dist, y = avg_morpho_dist)) +
-  geom_point() +
-  geom_smooth(method = "lm") + 
-  ggplot(scaled_length_dist, aes(x = phylo_dist, y = length_dist)) +
-  geom_point() +
-  geom_smooth(method = 'lm') +
-  ggplot(scaled_width_dist, aes(x = phylo_dist, y = width_dist)) +
-  geom_point() +
-  geom_smooth(method = "lm")+ 
-  ggplot(scaled_depth_dist, aes(x = phylo_dist, y = depth_dist)) +
-  geom_point() +
-  geom_smooth(method = 'lm')
+
+combined <- ggplot() +
+  # plot avg morpho dist overlayed with bm area
+  geom_point(scaled_morpho_dist, mapping = aes(x = phylo_dist, y = avg_morpho_dist))+
+  geom_smooth(scaled_morpho_dist, mapping = aes(x = phylo_dist, y = avg_morpho_dist), method = 'lm') +
+  geom_point(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
+  # length
+  ggplot() +
+  geom_point(scaled_length_dist, mapping = aes(x = phylo_dist, y = length_dist)) +
+  geom_smooth(scaled_length_dist, mapping = aes(x = phylo_dist, y = length_dist), method = 'lm') +
+  geom_point(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
+  #width
+  ggplot() +
+  geom_point(scaled_width_dist, mapping = aes(x = phylo_dist, y = width_dist)) +
+  geom_smooth(scaled_width_dist, mapping = aes(x = phylo_dist, y = width_dist), method = "lm")+ 
+  geom_point(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
+  # depth
+  ggplot() +
+  geom_point(scaled_depth_dist, mapping = aes(x = phylo_dist, y = depth_dist)) +
+  geom_smooth(scaled_depth_dist, mapping = aes(x = phylo_dist, y = depth_dist), method = 'lm') + 
+  geom_point(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3)
 
 combined &
   ylim (0, 8)
