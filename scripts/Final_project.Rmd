@@ -326,6 +326,9 @@ cleaned_W_2L_dist <- W_2L_matrix %>%
   mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
   mutate(Var2 = str_to_lower(Var2)) %>%
   rename(W_2L_dist = value) %>%
+  mutate(A_standard = pmin(Var1, Var2), B_standard = pmax(Var1, Var2)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  select(W_2L_dist, Var1, Var2) %>%
   mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
   mutate(pair = str_replace_all(pair, " ", ""))
 
@@ -347,6 +350,9 @@ cleaned_s_dist <- s_matrix %>%
   mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
   mutate(Var2 = str_to_lower(Var2)) %>%
   rename(s_dist = value) %>%
+  mutate(A_standard = pmin(Var1, Var2), B_standard = pmax(Var1, Var2)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  select(s_dist, Var1, Var2) %>%
   mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
   mutate(pair = str_replace_all(pair, " ", ""))
 ```
@@ -367,9 +373,12 @@ phylo_dist_3d <- phylo_dist %>%
   mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
   mutate(Var2 = str_to_lower(Var2)) %>%
   rename(phylo_dist = value) %>%
+  mutate(A_standard = pmin(Var1, Var2), B_standard = pmax(Var1, Var2)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  select(phylo_dist, Var1, Var2) %>%
   mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
-  mutate(pair = str_replace_all(pair, " ", ""))
-  
+  mutate(pair = str_replace_all(pair, " ", "")) 
+
 
 # cleaning for AVONET-----------------
 cleaned_phylo_dist <- phylo_dist %>%
@@ -383,8 +392,7 @@ cleaned_phylo_dist <- phylo_dist %>%
   mutate(Var2 = str_to_lower(Var2)) %>%
   rename(phylo_dist = value) %>%
   mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
-  mutate(pair = str_replace_all(pair, " ", ""))
-
+  mutate(pair = str_replace_all(pair, " ", "")) 
 ```
 
 
@@ -676,6 +684,8 @@ For Mosleh et al data:
 # trim out maui amakihi
 tree_3d <- tree %>%
   drop.tip("Maui_Amakihi")
+
+plot(tree_3d)
 # s----------------------------
 # first bm quantile generation
 s_sd <- bmMLE(tree_3d, as.vector(s_3d$mean_s_norm))
@@ -787,6 +797,53 @@ combined <- ggplot() +
 combined
   
 ```
+
+#### Selecting points above the line :D
+```{r}
+# s ---------------------------
+s_greater_than_bm <- s_3d_phylo %>%
+  inner_join(bm_s, by = join_by(phylo_dist)) %>%
+  filter(s_dist > morpho_dist) %>%
+  select(!pair.y) %>%
+  mutate(diff = (s_dist - morpho_dist)) %>%
+  distinct()
+
+# plot phylo_dist and greatest diff, basically zooming in to the points that are above line
+ggplot(s_greater_than_bm, aes(x = phylo_dist, y = diff)) + 
+  geom_point()
+
+# sum the diff each sp has
+s_greater_bm_by_sp <- s_greater_than_bm %>%
+  separate(col = pair.x, into = c("sp1", "sp2"), sep = ",") %>%
+  mutate(sp_a = pmin(sp1, sp2), sp_b = pmax(sp1, sp2)) %>%
+  select(!c(sp1, sp2)) %>%
+  pivot_longer(cols = c(sp_a, sp_b), names_to = "role", values_to = "sp") %>%
+  group_by(sp) %>%
+  summarise(diff = sum(diff), .groups = "drop")
+
+  
+# w/2l ----------------------
+W_2L_greater_than_bm <- W_2L_3d_phylo %>%
+  inner_join(bm_W_2L, by = join_by(phylo_dist)) %>%
+  filter(W_2L_dist > morpho_dist) %>%
+  select(!pair.y) %>%
+  mutate(diff = (W_2L_dist - morpho_dist)) %>%
+  distinct()
+
+# plot phylo_dist and greatest diff, basically zooming in to the points that are above line
+ggplot(W_2L_greater_than_bm, aes(x = phylo_dist, y = diff)) + 
+  geom_point()
+
+# sum the diff each sp has
+W_2L_greater_bm_by_sp <- W_2L_greater_than_bm %>%
+  separate(col = pair.x, into = c("sp1", "sp2"), sep = ",") %>%
+  mutate(sp_a = pmin(sp1, sp2), sp_b = pmax(sp1, sp2)) %>%
+  select(!c(sp1, sp2)) %>%
+  pivot_longer(cols = c(sp_a, sp_b), names_to = "role", values_to = "sp") %>%
+  group_by(sp) %>%
+  summarise(diff = sum(diff), .groups = "drop")
+```
+
 
 notes:
 find trendline for the BM model 
