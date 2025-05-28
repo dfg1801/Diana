@@ -1,0 +1,116 @@
+---
+title: "Extracting beak data"
+format: html
+---
+
+This is work figuring out how to extact data on 3d scans of honeycreepers from the paper [Beak morphometry and morphogenesis across avian radiations](https://royalsocietypublishing.org/doi/10.1098/rspb.2023.0420). A collection of mathematica notebooks and python scripts were made available [here](https://doi.org/10.7910/DVN/UQQ6EZ). Download those scripts, and then this quarto file can be run from the root of the downloaded directory.
+
+From the file "PhyloMorphospace.nb" we see that files ending in "morphospace3.csv" contain the following 3 columns:
+
+1. $W/(2 L)$
+2. $\tilde{\kappa}x$
+3. $\tilde{S}$
+
+We want $W/(2 L)$ and $\tilde{S}$.
+
+Let's read in those data
+
+```{r}
+ms <- read.csv("Run Results/Honey Creepers-morphospace3.csv", 
+               header = FALSE)
+
+nrow(ms)
+```
+
+There are 41 specimens. From the same mathematica notebook we get the following info on diet:
+
+```{r}
+# these are specifically the diet classifications for the 41 Hawaiian 
+# honeycreeper specimens
+dietGroup <- c("42", "42", "42", "42", "42", "42", "42", "42", "42", "42", "42", 
+               "2", "2", "2", "2", "4", "4", "51", "4", "4", "4", "4", 
+               "42", "42", "42", "4", "4", "4", "4", "2", "4", "4", 
+               "1", "1", "1", "1", "1", "2", "2", "2", "2")
+
+# we can map diet IDs to more verbose names
+dietNames <- c("1" = "seeds and nuts", "2" = "nectar", "3" = "eggs and blood", 
+               "4" = "insects and other inverts", "5" = "fruits and leaves", 
+               "51" = "fruits and leaves + seeds and nuts", 
+               "42" = "insects and other inverts + nectar", 
+               "54" = "fruits and leaves + insects and other inverts", 
+               "52" = "fruits and leaves + nectar")
+
+# these are the colors used in the mathematica nb
+dietToColor <- c("1" = "yellow", "2" = "pink", "3" = "red", "4" = "blue", 
+                 "5" = "green", "51" = "brown", "42" = "orange", 
+                 "54" = "purple", "52" = "black")
+
+# convert numeric IDs to names
+names(dietToColor) <- dietNames[names(dietToColor)]
+```
+
+Now we have to figure out which rows correspond to which species IDs.  The rows are unlabeled but it seems like they follow the order of file names (files that are not made availbe by the authors).  However, from the notebook "Mean_Curvature_Flow.nb" we can find 41 plots labeled with honeycreeper species names (as well as letters indicating specimen replicate).  Extracting those names we get:
+
+```{r}
+specID <- c("C. flavaA", "C. stejnegeriA", "C. stejnegeriB", "C. stejnegeriC", 
+            "C. stejnegeriD", "C. virensA", "C. virensB", "C. virensC", 
+            "C. virensD", "C. virensF", "C. virensG", "H. sanguineaA", 
+            "H. sanguineaB", "H. sanguineaC", "H. sanguineaD", "H. wilsoniA", 
+            "H. wilsoniB", "L. bailleuiA", "L. caeruleirostrisA", 
+            "L. coccineusA", "L. coccineusB", "M. manaA", "M. parvaA", 
+            "M. parvaB", "M. parvaC", "M. phaeosomaA", "M. phaeosomaB", 
+            "O. bairdiA", "O. bairdiB", "P. doleiA", "P. montanaA", 
+            "P. xanthophrysA", "T. cantansA", "T. cantansB", "T. cantansC", 
+            "T. cantansD", "T. ultimaA", "V. coccineaA", "V. coccineaA", 
+            "V. coccineaA", "V. coccineaD")
+
+# clean up so it's just species name (i.e. remove replicate letter)
+spnames <- substring(specID, 1, nchar(specID) - 1)
+```
+
+Now we can combine the morphometric data with diet and species names
+
+```{r}
+ms <- cbind(spnames, ms, dietNames[dietGroup])
+names(ms) <- c("species", "width_2length", "kapa_x_norm", "S_norm", "diet")
+head(ms) |> knitr::kable()
+```
+
+
+Now we need to do some sanity checks to make sure we have correctly extracted the data. First let's re-create the diet plot
+
+```{r}
+library(ggplot2)
+
+ggplot(ms, aes(x = width_2length, y = S_norm, color = diet)) +
+    geom_point() + 
+    scale_color_manual(values = dietToColor)
+```
+
+Comparing that to the plot produced by `plotDietPoints2D` in "PhyloMorphospace.nb" we look like we're getting the same result (remembering that the plot from the notebook has other finch species in it).
+
+Now we can also look at species names in the PCA space.  This is the plot in "PhyloMorphospace.nb" produced by `TreeToMorphospace[traits, taxons, {1, 3}, newtree]`.  We need to read in a different morphospace file and then we can make the plot
+
+```{r}
+foo <- read.csv("Run Results/Honey Creepers-morphospace1.csv", 
+                header = FALSE)
+
+boo <- aggregate(foo, list(species = spnames), mean)    
+
+library(ggrepel)
+ggplot(boo, aes(x = V1, y = V3, label = species)) +
+    geom_point() +
+    geom_text_repel()
+```
+
+This plot looks exactly the same as the one in the notebook (minus the outgroups shown in the notebook), so I'd say we're good!
+
+Last thing, let's export the clean data 
+
+```{r}
+write.csv(ms, file = "clean_morpho_diet.csv", row.names = FALSE)
+```
+
+
+
+

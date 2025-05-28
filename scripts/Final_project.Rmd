@@ -23,9 +23,11 @@ require(Hmisc)
 
 Hi! Welcome to my final project page. Some background info: for birds, there is evidence of beak morphology being highly related to feeding ecology. The HI honeycreepers are an adaptive radiation with crazy variation in beak morphology, which leads people to believe that their 
 But just looking at the birds' beaks and diets, it seems like many similar feeding ecologies still yield a lot of different beak shapes. I wanted to see if there is correlation between difference in beak morphology and phylogenetic distance, maybe hinting at the interaction between a species' lineage and their feeding ecology shaping their morphology. Are we able to predict species' morphological differences based on their phylogenetic difference? What does this pattern look like? 
-My morphological data is taken from [AVONET](https://opentraits.org/datasets/avonet.html). The landmarks for the measurements are written in the data dictionary, but here is a figure from their paper which visually shows the measurement methods. Note number 1, 3, and 4 in particular. 
+My first set of morphological data is taken from [AVONET](https://opentraits.org/datasets/avonet.html). The landmarks for the measurements are written in the data dictionary, but here is a figure from their paper which visually shows the measurement methods. Note number 1, 3, and 4 in particular. 
 
 ![](C:/Users/diana/OneDrive/Desktop/Homeworks nd sylabus/Data science class/Diana_Final/data/Measurement_diagram.PNG)
+
+The second set of morphological info is from "Beak morphometry and morphogenesis across avian radiations"
 
 # Setup
 
@@ -41,6 +43,26 @@ library(patchwork)
 library(car)
 library(ggResidpanel)
 library(VGAM)
+
+#functions
+bmMLE <- function(phy, x) {
+  #browser() is debug mode
+    # calculate VCV matrix and inverse
+    S <- ape::vcv(phy, model = 'Brownian', corr = FALSE)
+    Sinv <- solve(S)
+
+    # a vector of 1s for matrix math below
+    one <- rep(1, nrow(Sinv))
+
+    # MLE of trait value at root
+    x0 <- as.vector(solve(one %*% Sinv %*% one) %*% (one %*% Sinv %*% x))
+
+    # MLE of BM variance
+    s2 <- as.vector(((x - x0) %*% Sinv %*% (x - x0)) / nrow(Sinv))
+
+    return(list(x0 = x0, s2 = s2, Smat = s2 * S))
+}
+
 ```
 
 ### Load data
@@ -51,10 +73,17 @@ I will use bird morphological measurements from AVONET, combined with my own gen
 ```{r, tree}
 data <- read_csv(here("data", "AVONET_Raw_Data.csv")) # avonet data
 names <- read_csv(here("data", "Honeycreeper_info.csv")) # gathered honeycreeper info
+data_3d <- read_csv(here("data", "clean_morpho_diet.csv")) # data from mosleh et al
 
+# tree from lerner et al
 tree_name <- file.path(here("data", "Lerner_etal_2011_CurrBio_honeycreepers_mod.newick"))
 tree <- read.newick(tree_name)
 plot(tree) # test that the tree read in correctly
+
+# tree from luke campillo
+tree_lc <- file.path("C:/Users/diana/OneDrive/Desktop/grad research/honeycreepers/phylopath_tree_rev/phylopath_tree_rev/output/all_finch_MRC.tree")
+tree_lc <- read.tree(tree_lc)
+plot(tree_lc)
 ```
 
 
@@ -62,10 +91,14 @@ plot(tree) # test that the tree read in correctly
 
 For this project, I will be using data from AVONET, an online database of bird data. In particular, I will be selecting out the HI honeycreepers within this dataset. There were many complications with this process because of multiple species having alternative scientific names as well as the phylogenetic data having a mix of the common or 'ōlelo names. Sigh. 
 
-### Morphological data
+## Morphological data 
+
+### From AVONET
 ```{r}
+# first, clean self-generated creeper info --------------
 names_clean <- names %>%
   clean_names()
+# next clean + join avonet data to self generated dataset-----------------
 morpho <- data %>%
   select(Avibase.ID:Publication) %>% # for some reason imported with a bunch of extra empty cols? 
   clean_names() %>% # clean names lol 
@@ -99,6 +132,63 @@ So after all of that, we can finally have a nice table with all of our honeycree
 morpho
 ```
 
+
+### From Mosleh et al
+```{r}
+# done above already, clean self-generated creeper info --------------
+names_clean <- names %>%
+  clean_names()
+#first, change sci names to full--------------------------
+data_3d <- data_3d %>% 
+  mutate(across(species,
+         ~ ifelse(. == "C. flava", "Chlorodrepanis flava", .))) %>%
+  mutate(across(species,   
+         ~ ifelse(. == "C. stejnegeri", "Chlorodrepanis stejnegeri", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "C. virens", "Chlorodrepanis virens", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "H. sanguinea", "Himatione sanguinea", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "H. wilsoni", "Hemignathus wilsoni", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "L. bailleui", "Loxioides bailleui", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "L. caeruleirostris", "Loxops caeruleirostris", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "L. coccineus", "Loxops coccineus", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "M. mana", "Manucerthia mana", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "M. parva", "Magumma parva", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "M. phaeosoma", "Melamprosops phaeosoma", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "O. bairdi", "Oreomystis bairdi", .))) %>%  
+  mutate(across(species,  
+         ~ ifelse(. == "P. dolei", "Palmeria dolei", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "P. montana", "Paroreomyza montana", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "P. xanthophrys", "Pseudonestor xanthophrys", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "T. cantans", "Telespiza cantans", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "T. ultima", "Telespiza ultima", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "V. coccinea", "Drepanis coccinea", .)))# Vestiaria coccinea = Drepanis coccinea
+
+# now join with names
+morpho_3d <- data_3d %>%
+  rename(sci_name = species) %>%
+  inner_join(names_clean, by = "sci_name") %>%
+  select(sci_name, hi_name, common_name, diet.y, detailed_diet, width_2length:diet.x) %>%
+  mutate(common_name = coalesce(common_name, hi_name)) %>% # coalesce (frm dplyr) is good for replacing NAs with values from other vectors. if there is a missing common name, use the name from the hi_name column
+  mutate(common_name = str_replace_all(common_name, "`", "")) %>% # get rid of tone markings so it can match the names from the phylo 
+  mutate(common_name = str_replace_all(common_name, "ō", "o")) %>%
+  mutate(common_name = str_replace_all(common_name, "ā", "a"))
+```
+
+
 # Analysis/Results
 
 My end goal for this analysis is to create scaled and normalilzed regressions of the pairwise phylogenetic and morphometric distances between each species in order to see if there is some relationship between the two which differs from the null. If I had more time, I would definetly add more statistical rigor but for now I am just trying to get things working. 
@@ -109,11 +199,11 @@ But before comparing the pairwise  distances, we first have to generate them. Fi
 
 Luckily there is a function (stats::dist()) which does this. As well as (phytools::cophenetic.phylo()), which finds distances based on branch lengths from phylogenetic data. Once I make the matrices, then I melt them into a dataframe, with the important columns being the pair of names and the other being the distance between the pair. Whew! 
 
-Note that the final data will have duplicates in the form of reciprocated pairs (eg. akohekohe, anianiau and anianiau, akohekohe). Probably best practice would be to cut these out but I'm not actually doing much in terms of statistical testing so it doesn't matter too much for me :P One thing I did do is to make sure to cut out pairwise distnaces between the same species as they are inherently going to be 0. I didn't want these 0s to skew the z-scoring and they are not informative data. 
+One thing I did do is to make sure to cut out pairwise distnaces between the same species as they are inherently going to be 0. I didn't want these 0s to skew the z-scoring and they are not informative data. 
 
-### Morphometric Data
+### AVONET morphological Data
 
-Again, so much cleaning so that the phylogenetic and morphometric data can match. Also, I really struggled to make the matrix keep the species names for some reason T_T
+Again, so much cleaning so that the phylogenetic and morphological data can match. Also, I really struggled to make the matrix keep the species names for some reason T_T
 
 #### Beak Length
 This measurement is specifically for beak length to the culmen (see fig. 1). There was also beak length to the nares, but I arbitrarily chose to do this one. 
@@ -208,13 +298,80 @@ cleaned_depth_dist <- depth_matrix %>%
   mutate(pair = str_replace_all(pair, " ", ""))
 ```
 
+### Mosleh et al morphological data
+```{r}
+# clean up names---------------- 
+morpho_3d <- morpho_3d %>%
+  mutate(common_name = str_replace_all(common_name, " ", "_")) %>%
+  mutate(common_name = str_replace_all(common_name, "Lesser_Amakihi", "Anianiau")) %>% # the phylo used diff names for these T_T
+  mutate(common_name = str_replace_all(common_name, "Hawaii_akepa", "Akepa")) %>%
+  mutate(common_name = str_replace_all(common_name, "Crested_honeycreeper", "Akohekohe"))
+
+# Wc/(2Lc) -----------------
+### clean and average the multiple specimens per sp 
+W_2L_3d <- morpho_3d %>%
+  select(common_name, width_2length) %>%
+  group_by(common_name) %>%
+  summarise(mean_width_2length = mean(width_2length)) %>% # s_norm is S~, the dimensionless S (normalized against beak scale)
+  mutate(mean_width_2length = scale(mean_width_2length)) # z transform 
+###  now actually make matrix
+# setup
+W_2L_matrix=dist(W_2L_3d)
+W_2L_matrix=as.matrix(W_2L_matrix, labels=TRUE)
+colnames(W_2L_matrix) <- rownames(W_2L_matrix) <- W_2L_3d[['common_name']] #this is the line that keeps the sp names
+# make matrix now 
+cleaned_W_2L_dist <- W_2L_matrix %>%
+  melt() %>%
+  filter(Var1 != Var2) %>%
+  mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
+  mutate(Var2 = str_to_lower(Var2)) %>%
+  rename(W_2L_dist = value) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", ""))
+
+# sharpening rate (s)---------------------
+s_3d <- morpho_3d %>%
+  select(common_name, S_norm) %>%
+  group_by(common_name) %>%
+  summarise(mean_s_norm = mean(S_norm)) %>% # s_norm is S~, the dimensionless S (normalized against beak scale)
+  mutate(mean_s_norm = scale(mean_s_norm)) # z transform
+###  now actually make matrix
+# setup
+s_matrix=dist(s_3d)
+s_matrix=as.matrix(s_matrix, labels=TRUE)
+colnames(s_matrix) <- rownames(s_matrix) <- s_3d[['common_name']] #this is the  line to store sp names
+# make matrix now 
+cleaned_s_dist <- s_matrix %>%
+  melt() %>%
+  filter(Var1 != Var2) %>%
+  mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
+  mutate(Var2 = str_to_lower(Var2)) %>%
+  rename(s_dist = value) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", ""))
+```
 
 ### Phylogenetic data
 
 Now to generate the pairwise phylogenetic distances :)
 ```{r}
-phylo_dist <- cophenetic.phylo(tree) # make pairwise matrix of phylogenetic distances
+#generate phylo pairwise dist matrix
+phylo_dist <- cophenetic.phylo(tree) 
 
+# cleaning for mosleh et al ------
+phylo_dist_3d <- phylo_dist %>%
+  melt() %>%
+  filter(Var1 != Var2) %>%
+  filter(Var1 != "Maui_Amakihi") %>% # no morpho data for maui amakihi, remove
+  filter(Var2 != "Maui_Amakihi") %>%
+  mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
+  mutate(Var2 = str_to_lower(Var2)) %>%
+  rename(phylo_dist = value) %>%
+  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", ""))
+  
+
+# cleaning for AVONET-----------------
 cleaned_phylo_dist <- phylo_dist %>%
   melt() %>% #turn matrix into a dataframe
   filter(Var1 != Var2) %>%
@@ -231,7 +388,26 @@ cleaned_phylo_dist <- phylo_dist %>%
 ```
 
 
-#### Joining phylo data to morpho data
+### Joining phylo data to morpho data
+#### Mosleh et al data
+```{r}
+# s-----------------------
+s_3d_phylo <- cleaned_s_dist %>%
+  left_join(phylo_dist_3d, by = join_by(pair)) %>%
+  mutate(A_standard = pmin(Var1.x, Var2.x), B_standard = pmax(Var1.x, Var2.x)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  select(pair, s_dist, phylo_dist)
+
+#Wc/2Lc -----------------
+W_2L_3d_phylo <- cleaned_W_2L_dist %>%
+  left_join(phylo_dist_3d, by = join_by(pair)) %>%
+  mutate(A_standard = pmin(Var1.x, Var2.x), B_standard = pmax(Var1.x, Var2.x)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  select(pair, W_2L_dist, phylo_dist)
+```
+
+
+#### AVONET data
 ```{r}
 # length
 scaled_length_dist <- cleaned_length_dist %>%
@@ -280,7 +456,40 @@ Matching the phylo and morpho datasets was quite frustrating, not only did the p
 
 But now that we cleaned that up so diligently above, lets move on to plotting! In addition, let's see how a basic linear model fits the data for funsies lol
 
-### Beak length
+### Mosleh et al + Lerner phylo
+
+#### Sharpening rate (s)
+```{r}
+ggplot(s_3d_phylo, aes(x = phylo_dist, y = s_dist)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  labs(title = "Pairwise distances",
+       subtitle = "S (sharpening rate) distance vs phylogenetic distance",
+       caption = "all data transformed via z-score normalization", 
+       x = "Phylogenetic distance", 
+       y = "S distance"
+       ) + 
+  theme_bw()
+```
+
+#### Wc/2Lc
+```{r}
+ggplot(s_3d_phylo, aes(x = phylo_dist, y = s_dist)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  labs(title = "Pairwise distances",
+       subtitle = "W/2L distance vs phylogenetic distance",
+       caption = "all data transformed via z-score normalization", 
+       x = "Phylogenetic distance", 
+       y = "S distance"
+       ) + 
+  theme_bw()
+```
+
+
+### AVONET data
+
+#### Beak length
 
 ```{r, beak_length}
 ggplot(scaled_length_dist, aes(x = phylo_dist, y = length_dist)) +
@@ -295,16 +504,8 @@ ggplot(scaled_length_dist, aes(x = phylo_dist, y = length_dist)) +
   theme_bw()
 ```
 
-#### Model making
-```{r}
-length_mod <- lm(length_dist~phylo_dist, data = scaled_length_dist)
-Anova(length_mod)
-resid_panel(length_mod, plots = c("resid", "qq", "lev", "hist"))
-```
 
-This one really doesn't have any correlation with phylo dist ^^' 
-
-### Beak width
+#### Beak width
 ```{r, beak_width}
 ggplot(scaled_width_dist, aes(x = phylo_dist, y = width_dist)) +
   geom_point() +
@@ -318,16 +519,7 @@ ggplot(scaled_width_dist, aes(x = phylo_dist, y = width_dist)) +
   theme_bw()
 ```
 
-#### Model making
-```{r}
-width_mod <- lm(width_dist~phylo_dist, data = scaled_width_dist)
-Anova(width_mod)
-resid_panel(width_mod, plots = c("resid", "qq", "lev", "hist"))
-```
-
-Woah, phylo dist does have a pretty strong positive relationship with beak width! 
-
-### Beak depth
+#### Beak depth
 ```{r, beak_depth}
 ggplot(scaled_depth_dist, aes(x = phylo_dist, y = depth_dist)) +
   geom_point() +
@@ -351,7 +543,7 @@ resid_panel(depth_mod, plots = c("resid", "qq", "lev", "hist"))
 
 The phylo dist of 6 has a wierd gap, this seems to be because the maui parrotbill, compared to all the sp ~6 phylo dist away (amakihis), has high morphological beak depth dist. Meanwhile, these sp compared to it's sister, the akipolaau has lower morpho dist to everyone. Makes sense considering the high beak depth of the maui parrotbill's compared to all the amakihis.
 
-### Average of morpho
+#### Average of morpho
 ```{r, avg_morpho}
 ggplot(scaled_morpho_dist, aes(x = phylo_dist, y = avg_morpho_dist)) +
   geom_point() +
@@ -367,14 +559,6 @@ ggplot(scaled_morpho_dist, aes(x = phylo_dist, y = avg_morpho_dist)) +
 sig <- sd(scaled_morpho_dist$avg_morpho_dist) # saving standard deviation of this plot
 ```
 
-### Model making
-I will make a model to see which measurement (if any) has the best explanatory power for 
-```{r}
-avg_mod <- lm(avg_morpho_dist~phylo_dist, data = scaled_morpho_dist)
-Anova(avg_mod)
-resid_panel(avg_mod, plots = c("resid", "qq", "lev", "hist"))
-```
-
 ## Discussion
 
 ### Null model of trait evolution
@@ -382,9 +566,10 @@ resid_panel(avg_mod, plots = c("resid", "qq", "lev", "hist"))
 Conveniently, there is an R function to do this within phytools :0
 I am just simulating one trait - the average morpho 
 
-OLD SCRIPT: 
+####OLD SCRIPT: 
 ```{r}
 # simulate Brownian evolution on tree, just do avg of all morpho diff--------
+# make sure the tips and morpho are the same length 
 x <- fastBM(tree, sig2 = sig^2, internal = TRUE) # sig from mean morpho above
 phenogram(tree, x, spread.labels = TRUE, spread.cost = c(1, 0)) # visualize Brownian evolution on a tree, spread cost just makes sure labels don't overlap
 
@@ -431,15 +616,49 @@ scaled_sim_dist <- cleaned_sim_dist %>%
 ```
 
 
-NEW: 
+####NEW: 
+for AVONET data: 
 ``` {r}
+# For AVONET data -----------------------------------
+#vcv_test <- vcv(tree, model = "Brownian", corr = FALSE)
+tree_trim <- tree %>%
+  drop.tip(c("Akepa", "Maui_Creeper"))
+
 # trying vgam function to extract 
 #Quantiles corresponding to cumulative proportions of a distribution. E.g., the 95% quantile is the value for which 95% of the data will be smaller than that value.
 
-bm_val <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * sig^2))
-bm_morpho <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, morpho_dist = bm_val, pair = cleaned_phylo_dist$pair)
+# bm quantile generation for length------------------
+length_sd <- bmMLE(tree_trim, as.vector(beak_length$mean_length_culmen)) # generate sd
 
-ggplot(bm_morpho, aes(x = phylo_dist, y = morpho_dist)) +
+bm_l <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * length_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_length <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, 
+                        morpho_dist = bm_l, 
+                        pair = cleaned_phylo_dist$pair)
+
+# bm quantile generation for width------------------
+width_sd <- bmMLE(tree_trim, as.vector(beak_width$mean_width))
+
+bm_w <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * width_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_width <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, 
+                        morpho_dist = bm_w, 
+                        pair = cleaned_phylo_dist$pair)
+
+# bm quantile generation for depth------------------
+depth_sd <- bmMLE(tree_trim, as.vector(beak_depth$mean_depth))
+
+bm_d <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * depth_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_depth <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, 
+                        morpho_dist = bm_d, 
+                        pair = cleaned_phylo_dist$pair)
+
+# general morpho (NOT DONE YET)
+bm_val <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * sig^2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_morpho <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, 
+                        morpho_dist = bm_val, 
+                        pair = cleaned_phylo_dist$pair)
+
+#test plot
+ggplot(bm_length, aes(x = phylo_dist, y = morpho_dist)) +
   geom_point() +
   geom_line() +
   geom_area(fill = "skyblue", alpha = .3) +
@@ -450,6 +669,27 @@ ggplot(bm_morpho, aes(x = phylo_dist, y = morpho_dist)) +
        ) + 
   theme_bw()
 
+```
+
+For Mosleh et al data:
+```{r}
+# trim out maui amakihi
+tree_3d <- tree %>%
+  drop.tip("Maui_Amakihi")
+# s----------------------------
+# first bm quantile generation
+s_sd <- bmMLE(tree_3d, as.vector(s_3d$mean_s_norm))
+bm_s <- qfoldnorm(0.95, mean = 0, sd = sqrt(phylo_dist_3d$phylo_dist * s_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_s <- data.frame(phylo_dist = phylo_dist_3d$phylo_dist, 
+                        morpho_dist = bm_s, 
+                        pair = phylo_dist_3d$pair)
+
+# W/2L --------------
+W_2L_sd <- bmMLE(tree_3d, as.vector(W_2L_3d$mean_width_2length))
+bm_W_2L <- qfoldnorm(0.95, mean = 0, sd = sqrt(phylo_dist_3d$phylo_dist * W_2L_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_W_2L <- data.frame(phylo_dist = phylo_dist_3d$phylo_dist, 
+                        morpho_dist = bm_W_2L, 
+                        pair = phylo_dist_3d$pair)
 ```
 
 #### Model making
@@ -488,7 +728,7 @@ In a perfect world, my data would be more evely distributed along the whole rang
 <!-- Simply put, this model says assumes no evolutionary direction. It assumes that pairwise morphological distance will increase in variance as pairwise phylogenetic distance increases, following a normal distribution. The mean morphological distance at any point in time will remain 0. I will calculate the variance from the data. '  -->
 
 ### Conclusion
-
+AVONET: 
 ```{r}
 
 combined <- ggplot() +
@@ -498,33 +738,61 @@ combined <- ggplot() +
   geom_point(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
   geom_line(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
   geom_area(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
-  # length
+  # length---------------
   ggplot() +
   geom_point(scaled_length_dist, mapping = aes(x = phylo_dist, y = length_dist)) +
   geom_smooth(scaled_length_dist, mapping = aes(x = phylo_dist, y = length_dist), method = 'lm') +
-  geom_point(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
-  geom_line(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
-  geom_area(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
-  #width
+  geom_point(bm_length, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_length, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_length, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
+  #width-----------------
   ggplot() +
   geom_point(scaled_width_dist, mapping = aes(x = phylo_dist, y = width_dist)) +
   geom_smooth(scaled_width_dist, mapping = aes(x = phylo_dist, y = width_dist), method = "lm")+ 
-  geom_point(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
-  geom_line(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
-  geom_area(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
-  # depth
+  geom_point(bm_width, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_width, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_width, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
+  # depth--------------
   ggplot() +
   geom_point(scaled_depth_dist, mapping = aes(x = phylo_dist, y = depth_dist)) +
   geom_smooth(scaled_depth_dist, mapping = aes(x = phylo_dist, y = depth_dist), method = 'lm') + 
-  geom_point(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
-  geom_line(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
-  geom_area(bm_morpho, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3)
+  geom_point(bm_depth, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_depth, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_depth, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3)
 
 combined &
   ylim (0, 8)
   
 ```
 
+Mosleh et al: 
+```{r}
+
+combined <- ggplot() +
+  # s -----------------------
+  geom_point(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist))+
+  geom_smooth(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist), method = 'lm') +
+  geom_point(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
+  # W/2L -------------------
+  ggplot() +
+  geom_point(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist)) +
+  geom_smooth(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist), method = 'lm') +
+  geom_point(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) 
+ 
+
+combined
+  
+```
+
+notes:
+find trendline for the BM model 
+which taxa are outliers 
+directionality 
+bin ,create syndromes
 
 If speciation happens most when species find new, unoccupied niche space and then adapt to it (ecological release), it would show up on my above graphs as a generically negative correlation, with smaller phylogenetic distance yielding high morphological distance, and higher phylogenetic distance yielding possibly lower morphological distance (with greater variance).  
 
