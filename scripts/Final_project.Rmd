@@ -628,7 +628,6 @@ scaled_sim_dist <- cleaned_sim_dist %>%
 for AVONET data: 
 ``` {r}
 # For AVONET data -----------------------------------
-#vcv_test <- vcv(tree, model = "Brownian", corr = FALSE)
 tree_trim <- tree %>%
   drop.tip(c("Akepa", "Maui_Creeper"))
 
@@ -844,6 +843,51 @@ W_2L_greater_bm_by_sp <- W_2L_greater_than_bm %>%
   summarise(diff = sum(diff), .groups = "drop")
 ```
 
+#### diff per diet
+```{r}
+morpho_3d_diet <- morpho_3d %>%
+  mutate(sp = str_to_lower(common_name)) %>%
+  select(sp, diet.y) %>% #setup data to be joined to s data 
+  distinct()
+
+# s------------------------------
+s_greater_bm_diet <- s_greater_than_bm %>%
+  separate(col = pair.x, into = c("sp1", "sp2"), sep = ",") %>%
+  mutate(sp_a = pmin(sp1, sp2), sp_b = pmax(sp1, sp2)) %>%
+  select(!c(sp1, sp2)) %>%
+  pivot_longer(cols = c(sp_a, sp_b), names_to = "role", values_to = "sp") %>%
+  left_join(morpho_3d_diet) %>%
+  group_by(diet.y) %>%
+  summarise(diff_sum = sum(diff), num_sp = n_distinct(sp), stdev = sd(diff)) %>%
+  mutate(avg_diff = diff_sum/num_sp) 
+
+# W/2L---------------------------
+W_2L_bm_by_diet <- W_2L_greater_than_bm %>%
+  separate(col = pair.x, into = c("sp1", "sp2"), sep = ",") %>%
+  mutate(sp_a = pmin(sp1, sp2), sp_b = pmax(sp1, sp2)) %>%
+  select(!c(sp1, sp2)) %>%
+  pivot_longer(cols = c(sp_a, sp_b), names_to = "role", values_to = "sp") %>%
+  left_join(morpho_3d_diet) %>%
+  group_by(diet.y) %>%
+  summarise(diff_sum = sum(diff), num_sp = n_distinct(sp), stdev = sd(diff)) %>%
+  mutate(avg_diff = diff_sum/num_sp) # only 1 insectivore, maui parrotbill with palila 
+
+W_2L_greater_bm_by_sp$sp # these are the sp significantly diff from BM
+
+```
+
+```{r}
+ggplot(s_greater_bm_diet, aes(x = diet.y, y = avg_diff)) +
+  geom_col() + 
+  geom_errorbar(aes(ymin = (avg_diff - stdev), ymax = (avg_diff + stdev)))
+ggplot(W_2L_bm_by_diet, aes(x = diet.y, y = avg_diff)) +
+  geom_col() + 
+  geom_errorbar(aes(ymin = (avg_diff - stdev), ymax = (avg_diff + stdev)))
+```
+
+ W_2L_bm_by_d
+For S - the one "insectivore, tree sap" sp is the akiapoaau lol. besides that, the nectivore, insectivore group has the highest average diff only counting the sp above BM line. 
+For W/2L - the "mamane seeds" sp is the palila. Interestingly, has a similar sum of diff as the akiapolaau's sharpening rate diff
 
 notes:
 find trendline for the BM model 
