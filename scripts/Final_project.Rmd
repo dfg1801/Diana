@@ -328,9 +328,9 @@ cleaned_W_2L_dist <- W_2L_matrix %>%
   rename(W_2L_dist = value) %>%
   mutate(A_standard = pmin(Var1, Var2), B_standard = pmax(Var1, Var2)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
   distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
-  select(W_2L_dist, Var1, Var2) %>%
-  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
-  mutate(pair = str_replace_all(pair, " ", ""))
+  mutate(pair = paste(A_standard, ",", B_standard)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", "")) %>%
+  select(W_2L_dist, Var1, Var2, pair)
 
 # sharpening rate (s)---------------------
 s_3d <- morpho_3d %>%
@@ -352,9 +352,10 @@ cleaned_s_dist <- s_matrix %>%
   rename(s_dist = value) %>%
   mutate(A_standard = pmin(Var1, Var2), B_standard = pmax(Var1, Var2)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
   distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
-  select(s_dist, Var1, Var2) %>%
-  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
-  mutate(pair = str_replace_all(pair, " ", ""))
+  mutate(pair = paste(A_standard, ",", B_standard)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", "")) %>%
+  select(s_dist, Var1, Var2, pair)
+
 ```
 
 ### Phylogenetic data
@@ -375,9 +376,9 @@ phylo_dist_3d <- phylo_dist %>%
   rename(phylo_dist = value) %>%
   mutate(A_standard = pmin(Var1, Var2), B_standard = pmax(Var1, Var2)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
   distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
-  select(phylo_dist, Var1, Var2) %>%
-  mutate(pair = paste(Var1, ",", Var2)) %>% # make 1 col w both pair names
-  mutate(pair = str_replace_all(pair, " ", "")) 
+  mutate(pair = paste(A_standard, ",", B_standard)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", "")) %>%
+  select(phylo_dist, Var1, Var2, pair)
 
 
 # cleaning for AVONET-----------------
@@ -633,11 +634,12 @@ tree_trim <- tree %>%
 
 # trying vgam function to extract 
 #Quantiles corresponding to cumulative proportions of a distribution. E.g., the 95% quantile is the value for which 95% of the data will be smaller than that value.
+# folded normal dist (normal dist of abs value) 95% quantile 
 
 # bm quantile generation for length------------------
 length_sd <- bmMLE(tree_trim, as.vector(beak_length$mean_length_culmen)) # generate sd
 
-bm_l <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * length_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_l <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * length_sd$s2)) 
 bm_length <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, 
                         morpho_dist = bm_l, 
                         pair = cleaned_phylo_dist$pair)
@@ -645,7 +647,7 @@ bm_length <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist,
 # bm quantile generation for width------------------
 width_sd <- bmMLE(tree_trim, as.vector(beak_width$mean_width))
 
-bm_w <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * width_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_w <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * width_sd$s2)) # 
 bm_width <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, 
                         morpho_dist = bm_w, 
                         pair = cleaned_phylo_dist$pair)
@@ -653,13 +655,13 @@ bm_width <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist,
 # bm quantile generation for depth------------------
 depth_sd <- bmMLE(tree_trim, as.vector(beak_depth$mean_depth))
 
-bm_d <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * depth_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_d <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * depth_sd$s2)) 
 bm_depth <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, 
                         morpho_dist = bm_d, 
                         pair = cleaned_phylo_dist$pair)
 
 # general morpho (NOT DONE YET)
-bm_val <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * sig^2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_val <- qfoldnorm(0.95, mean = 0, sd = sqrt(cleaned_phylo_dist$phylo_dist * sig^2)) 
 bm_morpho <- data.frame(phylo_dist = cleaned_phylo_dist$phylo_dist, 
                         morpho_dist = bm_val, 
                         pair = cleaned_phylo_dist$pair)
@@ -683,6 +685,9 @@ For Mosleh et al data:
 # trim out maui amakihi
 tree_3d <- tree %>%
   drop.tip("Maui_Amakihi")
+# trying vgam function to extract 
+#Quantiles corresponding to cumulative proportions of a distribution. E.g., the 95% quantile is the value for which 95% of the data will be smaller than that value.
+# folded normal dist (normal dist of abs value) 95% quantile 
 
 plot(tree_3d)
 # s----------------------------
@@ -694,8 +699,9 @@ bm_s <- data.frame(phylo_dist = phylo_dist_3d$phylo_dist,
                         pair = phylo_dist_3d$pair)
 
 # W/2L --------------
+# first bm quantile generation
 W_2L_sd <- bmMLE(tree_3d, as.vector(W_2L_3d$mean_width_2length))
-bm_W_2L <- qfoldnorm(0.95, mean = 0, sd = sqrt(phylo_dist_3d$phylo_dist * W_2L_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_W_2L <- qfoldnorm(0.95, mean = 0, sd = sqrt(phylo_dist_3d$phylo_dist * W_2L_sd$s2)) 
 bm_W_2L <- data.frame(phylo_dist = phylo_dist_3d$phylo_dist, 
                         morpho_dist = bm_W_2L, 
                         pair = phylo_dist_3d$pair)
@@ -905,3 +911,81 @@ In terms of improving my current results, I have two ideas:
 
 1. I think I just need more resolution. So more data points. Adding species (especially extinct ones) to the phylogeny and morphology datasets would probably help tremendously.  
 2. Phylogenetic distance did show ability as a predictor for beak width, indicating that maybe certain beak dimensions do just follow basic brownian motion, while others are affected by ecological effects. To me, this indicates necessity to be able to capture more dimensions of beak variation (not just length, width, and depth) such as curvature, symmetry of upper and lower mandible, etc. 
+
+
+
+# trying to sim fold norm data
+```{r}
+# s---------------------------------------
+nsim = 20 #sample.size = how many values to generate at each time step
+time = seq(0, 11.552685, length.out = 20) #nsim = 10 equidistent time steps (defined by length.out)  
+# greatest phyol_dist is 11.552685)
+
+# Setup storage matrix: rows = time points, columns = simulations
+morpho_dist_matrix <- matrix(nrow = length(time), ncol = nsim)
+
+# Loop by index, not value
+for (i in seq_along(time)) {
+  # simulate 20 values using fold norm distribution
+  test <- rfoldnorm(nsim, mean = 0, sd = sqrt(time[i] * s_sd$s2))  
+  
+  # Save to row i of the matrix
+  morpho_dist_matrix[i, ] <- test
+}
+
+
+morpho_df_s <- as.data.frame(morpho_dist_matrix)
+rownames(morpho_df_s) <- paste0("time_", round(time, 2))
+colnames(morpho_df_s) <- paste0("sim_", 1:nsim)
+
+morpho_sim_s <- morpho_df_s %>%
+  mutate(across(everything(), ~replace_na(., 0))) %>%
+  rownames_to_column() %>%
+  mutate(time = rowname) %>%
+  pivot_longer(cols = sim_1:sim_20) %>%
+  mutate(time = str_remove(time, "time_")) %>%
+  select(!rowname) %>%
+  rename(phylo_dist = time, morpho_dist = value) %>%
+  mutate(phylo_dist = as.numeric(phylo_dist))
+
+ggplot(morpho_sim_s, aes(x = phylo_dist, y = morpho_dist))+ 
+  geom_point() + 
+  geom_smooth(method = "lm") # doesn't show up???
+
+# W/2L---------------------------------------
+nsim = 20 #sample.size = how many values to generate at each time step
+time = seq(0, 11.552685, length.out = 20) #nsim = 10 equidistant time steps (defined by length.out)  
+# greatest phyol_dist is 11.552685)
+
+# Setup storage matrix: rows = time points, columns = simulations
+morpho_dist_matrix <- matrix(nrow = length(time), ncol = nsim)
+
+# Loop by index, not value
+for (i in seq_along(time)) {
+  # simulate 20 values using fold norm distribution
+  test <- rfoldnorm(nsim, mean = 0, sd = sqrt(time[i] * s_sd$s2))  
+  
+  # Save to row i of the matrix
+  morpho_dist_matrix[i, ] <- test
+}
+
+
+morpho_df_W_2L <- as.data.frame(morpho_dist_matrix)
+rownames(morpho_df_W_2L) <- paste0("time_", round(time, 2))
+colnames(morpho_df_W_2L) <- paste0("sim_", 1:nsim)
+
+morpho_sim_W_2L <- morpho_df_W_2L %>%
+  mutate(across(everything(), ~replace_na(., 0))) %>%
+  rownames_to_column() %>%
+  mutate(time = rowname) %>%
+  pivot_longer(cols = sim_1:sim_20) %>%
+  mutate(time = str_remove(time, "time_")) %>%
+  select(!rowname) %>%
+  rename(phylo_dist = time, morpho_dist = value) %>%
+  mutate(phylo_dist = as.numeric(phylo_dist))
+
+ggplot(morpho_sim_W_2L, aes(x = phylo_dist, y = morpho_dist))+ 
+  geom_point() + 
+  geom_smooth(method = "lm") 
+```
+
