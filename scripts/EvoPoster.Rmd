@@ -1,0 +1,590 @@
+---
+title: "Final Project"
+author: "Diana Gao"
+date: "2024-12-10"
+output:
+  html_document:
+    toc: TRUE
+    toc_float: TRUE
+    toc_depth: 4
+    df_print: paged
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE, 
+                      warning = FALSE, 
+                      fig.path = "../output/") #set directory for the figures to go in to
+require(Hmisc)
+```
+
+`r Hmisc::hidingTOC(hidden=TRUE,levels=0)`
+
+
+# Setup
+
+## Load Packages
+
+```{r}
+library(tidyverse)
+library(here)
+library(janitor)
+library(reshape2) # for working with matrices
+library(phytools) # for working with phylo data
+library(patchwork)
+library(car)
+library(ggResidpanel)
+library(VGAM)
+
+#functions
+bmMLE <- function(phy, x) {
+  #browser() is debug mode
+    # calculate VCV matrix and inverse
+    S <- ape::vcv(phy, model = 'Brownian', corr = FALSE)
+    Sinv <- solve(S)
+
+    # a vector of 1s for matrix math below
+    one <- rep(1, nrow(Sinv))
+
+    # MLE of trait value at root
+    x0 <- as.vector(solve(one %*% Sinv %*% one) %*% (one %*% Sinv %*% x))
+
+    # MLE of BM variance
+    s2 <- as.vector(((x - x0) %*% Sinv %*% (x - x0)) / nrow(Sinv))
+
+    return(list(x0 = x0, s2 = s2, Smat = s2 * S))
+}
+
+```
+
+### Load data
+
+```{r, tree}
+names <- read_csv(here("data", "Honeycreeper_info.csv")) # gathered honeycreeper info
+data_3d <- read_csv(here("data", "clean_morpho_diet.csv")) # data from mosleh et al
+
+# tree from lerner et al
+tree_name <- file.path(here("data", "Lerner_etal_2011_CurrBio_honeycreepers_mod.newick"))
+tree <- read.newick(tree_name)
+plot(tree) # test that the tree read in correctly
+
+# tree from luke campillo
+tree_lc <- file.path("C:/Users/diana/OneDrive/Desktop/grad research/honeycreepers/phylopath_tree_rev/phylopath_tree_rev/output/all_finch_MRC.tree")
+tree_lc <- read.tree(tree_lc)
+plot(tree_lc)
+```
+
+
+# Cleaning
+
+```{r}
+# clean self-generated creeper info --------------
+names_clean <- names %>%
+  clean_names()
+#first, change sci names to full--------------------------
+data_3d <- data_3d %>% 
+  mutate(across(species,
+         ~ ifelse(. == "C. flava", "Chlorodrepanis flava", .))) %>%
+  mutate(across(species,   
+         ~ ifelse(. == "C. stejnegeri", "Chlorodrepanis stejnegeri", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "C. virens", "Chlorodrepanis virens", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "H. sanguinea", "Himatione sanguinea", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "H. wilsoni", "Hemignathus wilsoni", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "L. bailleui", "Loxioides bailleui", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "L. caeruleirostris", "Loxops caeruleirostris", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "L. coccineus", "Loxops coccineus", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "M. mana", "Manucerthia mana", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "M. parva", "Magumma parva", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "M. phaeosoma", "Melamprosops phaeosoma", .))) %>%
+  mutate(across(species,  
+         ~ ifelse(. == "O. bairdi", "Oreomystis bairdi", .))) %>%  
+  mutate(across(species,  
+         ~ ifelse(. == "P. dolei", "Palmeria dolei", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "P. montana", "Paroreomyza montana", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "P. xanthophrys", "Pseudonestor xanthophrys", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "T. cantans", "Telespiza cantans", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "T. ultima", "Telespiza ultima", .))) %>% 
+  mutate(across(species,  
+         ~ ifelse(. == "V. coccinea", "Drepanis coccinea", .)))# Vestiaria coccinea = Drepanis coccinea
+
+# now join with names
+morpho_3d <- data_3d %>%
+  rename(sci_name = species) %>%
+  inner_join(names_clean, by = "sci_name") %>%
+  select(sci_name, hi_name, common_name, diet.y, detailed_diet, width_2length:diet.x) %>%
+  mutate(common_name = coalesce(common_name, hi_name)) %>% # coalesce (frm dplyr) is good for replacing NAs with values from other vectors. if there is a missing common name, use the name from the hi_name column
+  mutate(common_name = str_replace_all(common_name, "`", "")) %>% # get rid of tone markings so it can match the names from the phylo 
+  mutate(common_name = str_replace_all(common_name, "ō", "o")) %>%
+  mutate(common_name = str_replace_all(common_name, "ā", "a"))
+```
+
+
+# Dist Matrix Making
+
+## Morphological data
+```{r}
+# clean up names---------------- 
+morpho_3d <- morpho_3d %>%
+  mutate(common_name = str_replace_all(common_name, " ", "_")) %>%
+  mutate(common_name = str_replace_all(common_name, "Lesser_Amakihi", "Anianiau")) %>% # the phylo used diff names for these T_T
+  mutate(common_name = str_replace_all(common_name, "Hawaii_akepa", "Akepa")) %>%
+  mutate(common_name = str_replace_all(common_name, "Crested_honeycreeper", "Akohekohe"))
+
+# sharpening rate (s)---------------------
+s_3d <- morpho_3d %>%
+  select(common_name, S_norm) %>%
+  group_by(common_name) %>%
+  summarise(mean_s_norm = mean(S_norm)) %>% # s_norm is S~, the dimensionless S (normalized against beak scale)
+  mutate(mean_s_norm = scale(mean_s_norm)) # z transform
+###  now actually make matrix
+# setup
+s_matrix=dist(s_3d)
+s_matrix=as.matrix(s_matrix, labels=TRUE)
+colnames(s_matrix) <- rownames(s_matrix) <- s_3d[['common_name']] #this is the  line to store sp names
+# make matrix now 
+cleaned_s_dist <- s_matrix %>%
+  melt() %>%
+  filter(Var1 != Var2) %>%
+  mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
+  mutate(Var2 = str_to_lower(Var2)) %>%
+  rename(s_dist = value) %>%
+  mutate(A_standard = pmin(Var1, Var2), B_standard = pmax(Var1, Var2)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  mutate(pair = paste(A_standard, ",", B_standard)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", "")) %>%
+  select(s_dist, Var1, Var2, pair)
+
+# Wc/(2Lc) -----------------
+### clean and average the multiple specimens per sp 
+W_2L_3d <- morpho_3d %>%
+  select(common_name, width_2length) %>%
+  group_by(common_name) %>%
+  summarise(mean_width_2length = mean(width_2length)) %>% # s_norm is S~, the dimensionless S (normalized against beak scale)
+  mutate(mean_width_2length = scale(mean_width_2length)) # z transform 
+###  now actually make matrix
+# setup
+W_2L_matrix=dist(W_2L_3d)
+W_2L_matrix=as.matrix(W_2L_matrix, labels=TRUE)
+colnames(W_2L_matrix) <- rownames(W_2L_matrix) <- W_2L_3d[['common_name']] #this is the line that keeps the sp names
+# make matrix now 
+cleaned_W_2L_dist <- W_2L_matrix %>%
+  melt() %>%
+  filter(Var1 != Var2) %>%
+  mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
+  mutate(Var2 = str_to_lower(Var2)) %>%
+  rename(W_2L_dist = value) %>%
+  mutate(A_standard = pmin(Var1, Var2), B_standard = pmax(Var1, Var2)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  mutate(pair = paste(A_standard, ",", B_standard)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", "")) %>%
+  select(W_2L_dist, Var1, Var2, pair)
+```
+
+## Phylogenetic data
+```{r}
+#generate phylo pairwise dist matrix
+phylo_dist <- cophenetic.phylo(tree) 
+
+# cleaning for mosleh et al ------
+phylo_dist_3d <- phylo_dist %>%
+  melt() %>%
+  filter(Var1 != Var2) %>%
+  filter(Var1 != "Maui_Amakihi") %>% # no morpho data for maui amakihi, remove
+  filter(Var2 != "Maui_Amakihi") %>%
+  mutate(Var1 = str_to_lower(Var1)) %>% # make everything lowercase to make the matching easier 
+  mutate(Var2 = str_to_lower(Var2)) %>%
+  rename(phylo_dist = value) %>%
+  mutate(A_standard = pmin(Var1, Var2), B_standard = pmax(Var1, Var2)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  mutate(pair = paste(A_standard, ",", B_standard)) %>% # make 1 col w both pair names
+  mutate(pair = str_replace_all(pair, " ", "")) %>%
+  select(phylo_dist, Var1, Var2, pair)
+```
+
+## Joining phylo data to morpho data
+
+```{r}
+# s-----------------------
+s_3d_phylo <- cleaned_s_dist %>%
+  left_join(phylo_dist_3d, by = join_by(pair)) %>%
+  mutate(A_standard = pmin(Var1.x, Var2.x), B_standard = pmax(Var1.x, Var2.x)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  select(pair, s_dist, phylo_dist)
+
+#Wc/2Lc -----------------
+W_2L_3d_phylo <- cleaned_W_2L_dist %>%
+  left_join(phylo_dist_3d, by = join_by(pair)) %>%
+  mutate(A_standard = pmin(Var1.x, Var2.x), B_standard = pmax(Var1.x, Var2.x)) %>% # create temp columns for sorting purposes, with A always having the name that is first alphabetically
+  distinct(A_standard, B_standard, .keep_all = TRUE) %>% # only keep columns with distinct columns of A and B, which should both be sorted/factored so that dupes have the same A and B col 
+  select(pair, W_2L_dist, phylo_dist)
+```
+
+# Brownian Null
+
+## Generating 95% quantile for morpho data based on brownian null
+```{r}
+# trim out maui amakihi
+tree_3d <- tree %>%
+  drop.tip("Maui_Amakihi")
+# trying vgam function to extract 
+#Quantiles corresponding to cumulative proportions of a distribution. E.g., the 95% quantile is the value for which 95% of the data will be smaller than that value.
+# folded normal dist (normal dist of abs value) 95% quantile 
+
+plot(tree_3d)
+# s----------------------------
+# first bm quantile generation
+s_sd <- bmMLE(tree_3d, as.vector(s_3d$mean_s_norm))
+bm_s <- qfoldnorm(0.95, mean = 0, sd = sqrt(phylo_dist_3d$phylo_dist * s_sd$s2)) # sd of the data might be overestimated if pulled frmo real data, try vcv to see if this changes anything
+bm_s <- data.frame(phylo_dist = phylo_dist_3d$phylo_dist, 
+                        morpho_dist = bm_s, 
+                        pair = phylo_dist_3d$pair)
+
+# W/2L --------------
+# first bm quantile generation
+W_2L_sd <- bmMLE(tree_3d, as.vector(W_2L_3d$mean_width_2length))
+bm_W_2L <- qfoldnorm(0.95, mean = 0, sd = sqrt(phylo_dist_3d$phylo_dist * W_2L_sd$s2)) 
+bm_W_2L <- data.frame(phylo_dist = phylo_dist_3d$phylo_dist, 
+                        morpho_dist = bm_W_2L, 
+                        pair = phylo_dist_3d$pair)
+```
+
+
+### Plotting real data with brownian quantile overlay: 
+```{r}
+
+combined <- ggplot() +
+  # s -----------------------
+  geom_point(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist))+
+  geom_smooth(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist), method = 'lm') +
+  geom_point(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) +
+  # W/2L -------------------
+  ggplot() +
+  geom_point(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist)) +
+  geom_smooth(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist), method = 'lm') +
+  geom_point(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) 
+ 
+
+combined
+  
+```
+
+#### Selecting points above the quantile line
+```{r}
+# s ---------------------------
+s_greater_than_bm <- s_3d_phylo %>%
+  inner_join(bm_s, by = join_by(phylo_dist)) %>%
+  filter(s_dist > morpho_dist) %>%
+  select(!pair.y) %>%
+  mutate(diff = (s_dist - morpho_dist)) %>%
+  distinct()
+
+# plot phylo_dist and greatest diff, basically zooming in to the points that are above line
+ggplot(s_greater_than_bm, aes(x = phylo_dist, y = diff)) + 
+  geom_point()
+
+# sum the diff each sp has
+s_greater_bm_by_sp <- s_greater_than_bm %>%
+  separate(col = pair.x, into = c("sp1", "sp2"), sep = ",") %>%
+  mutate(sp_a = pmin(sp1, sp2), sp_b = pmax(sp1, sp2)) %>%
+  select(!c(sp1, sp2)) %>%
+  pivot_longer(cols = c(sp_a, sp_b), names_to = "role", values_to = "sp") %>%
+  group_by(sp) %>%
+  summarise(diff = sum(diff), .groups = "drop")
+
+s_greater_bm_by_sp
+
+# w/2l ----------------------
+W_2L_greater_than_bm <- W_2L_3d_phylo %>%
+  inner_join(bm_W_2L, by = join_by(phylo_dist)) %>%
+  filter(W_2L_dist > morpho_dist) %>%
+  select(!pair.y) %>%
+  mutate(diff = (W_2L_dist - morpho_dist)) %>%
+  distinct()
+
+# plot phylo_dist and greatest diff, basically zooming in to the points that are above line
+ggplot(W_2L_greater_than_bm, aes(x = phylo_dist, y = diff)) + 
+  geom_point()
+
+# sum the diff each sp has
+W_2L_greater_bm_by_sp <- W_2L_greater_than_bm %>%
+  separate(col = pair.x, into = c("sp1", "sp2"), sep = ",") %>%
+  mutate(sp_a = pmin(sp1, sp2), sp_b = pmax(sp1, sp2)) %>%
+  select(!c(sp1, sp2)) %>%
+  pivot_longer(cols = c(sp_a, sp_b), names_to = "role", values_to = "sp") %>%
+  group_by(sp) %>%
+  summarise(diff = sum(diff), .groups = "drop")
+
+W_2L_greater_bm_by_sp 
+```
+
+#### Diff per diet
+```{r}
+morpho_3d_diet <- morpho_3d %>%
+  mutate(sp = str_to_lower(common_name)) %>%
+  select(sp, diet.y) %>% #setup data to be joined to s data 
+  distinct()
+
+# s------------------------------
+s_greater_bm_diet <- s_greater_than_bm %>%
+  separate(col = pair.x, into = c("sp1", "sp2"), sep = ",") %>%
+  mutate(sp_a = pmin(sp1, sp2), sp_b = pmax(sp1, sp2)) %>%
+  select(!c(sp1, sp2)) %>%
+  pivot_longer(cols = c(sp_a, sp_b), names_to = "role", values_to = "sp") %>%
+  left_join(morpho_3d_diet) %>%
+  group_by(diet.y) %>%
+  summarise(diff_sum = sum(diff), num_sp = n_distinct(sp), stdev = sd(diff)) %>%
+  mutate(avg_diff = diff_sum/num_sp) 
+
+# W/2L---------------------------
+W_2L_bm_by_diet <- W_2L_greater_than_bm %>%
+  separate(col = pair.x, into = c("sp1", "sp2"), sep = ",") %>%
+  mutate(sp_a = pmin(sp1, sp2), sp_b = pmax(sp1, sp2)) %>%
+  select(!c(sp1, sp2)) %>%
+  pivot_longer(cols = c(sp_a, sp_b), names_to = "role", values_to = "sp") %>%
+  left_join(morpho_3d_diet) %>%
+  group_by(diet.y) %>%
+  summarise(diff_sum = sum(diff), num_sp = n_distinct(sp), stdev = sd(diff)) %>%
+  mutate(avg_diff = diff_sum/num_sp) # only 1 insectivore, maui parrotbill with palila 
+
+W_2L_greater_bm_by_sp$sp # these are the sp significantly diff from BM
+
+```
+
+### Plotting diff per diet 
+```{r}
+# s-------------------------
+ggplot(s_greater_bm_diet, aes(x = diet.y, y = avg_diff)) +
+  geom_col() + 
+  geom_errorbar(aes(ymin = (avg_diff - stdev), ymax = (avg_diff + stdev)))
+# W/2L ----------------------
+ggplot(W_2L_bm_by_diet, aes(x = diet.y, y = avg_diff)) +
+  geom_col() + 
+  geom_errorbar(aes(ymin = (avg_diff - stdev), ymax = (avg_diff + stdev)))
+```
+
+
+For S - the one "insectivore, tree sap" sp is the akiapoaau lol. besides that, the nectivore, insectivore group has the highest average diff only counting the sp above BM line. 
+For W/2L - the "mamane seeds" sp is the palila. Interestingly, has a similar sum of diff as the akiapolaau's sharpening rate diff
+
+notes:
+find trendline for the BM model 
+which taxa are outliers 
+directionality 
+bin ,create syndromes
+
+## Simulating morpho data according to brownian null
+```{r}
+# s---------------------------------------
+nsim = 20 #sample.size = how many values to generate at each time step
+time = seq(0, 11.552685, length.out = 20) #nsim = 10 equidistent time steps (defined by length.out)  
+# greatest phyol_dist is 11.552685)
+
+# Setup storage matrix: rows = time points, columns = simulations
+morpho_dist_matrix <- matrix(nrow = length(time), ncol = nsim)
+
+# Loop by index, not value
+for (i in seq_along(time)) {
+  # simulate 20 values using fold norm distribution
+  test <- rfoldnorm(nsim, mean = 0, sd = sqrt(time[i] * s_sd$s2))  
+  
+  # Save to row i of the matrix
+  morpho_dist_matrix[i, ] <- test
+}
+
+
+morpho_df_s <- as.data.frame(morpho_dist_matrix)
+rownames(morpho_df_s) <- paste0("time_", round(time, 2))
+colnames(morpho_df_s) <- paste0("sim_", 1:nsim)
+
+morpho_sim_s <- morpho_df_s %>%
+  mutate(across(everything(), ~replace_na(., 0))) %>%
+  rownames_to_column() %>%
+  mutate(time = rowname) %>%
+  pivot_longer(cols = sim_1:sim_20) %>%
+  mutate(time = str_remove(time, "time_")) %>%
+  select(!rowname) %>%
+  rename(phylo_dist = time, morpho_dist = value) %>%
+  mutate(phylo_dist = as.numeric(phylo_dist))
+
+# test plot:
+ggplot(morpho_sim_s, aes(x = phylo_dist, y = morpho_dist))+ 
+  geom_point() + 
+  geom_smooth(method = "lm") 
+
+# W/2L---------------------------------------
+nsim = 20 #sample.size = how many values to generate at each time step
+time = seq(0, 11.552685, length.out = 20) #nsim = 10 equidistant time steps (defined by length.out)  
+# greatest phyol_dist is 11.552685)
+
+# Setup storage matrix: rows = time points, columns = simulations
+morpho_dist_matrix <- matrix(nrow = length(time), ncol = nsim)
+
+# Loop by index, not value
+for (i in seq_along(time)) {
+  # simulate 20 values using fold norm distribution
+  test <- rfoldnorm(nsim, mean = 0, sd = sqrt(time[i] * s_sd$s2))  
+  
+  # Save to row i of the matrix
+  morpho_dist_matrix[i, ] <- test
+}
+
+
+morpho_df_W_2L <- as.data.frame(morpho_dist_matrix)
+rownames(morpho_df_W_2L) <- paste0("time_", round(time, 2))
+colnames(morpho_df_W_2L) <- paste0("sim_", 1:nsim)
+
+morpho_sim_W_2L <- morpho_df_W_2L %>%
+  mutate(across(everything(), ~replace_na(., 0))) %>%
+  rownames_to_column() %>%
+  mutate(time = rowname) %>%
+  pivot_longer(cols = sim_1:sim_20) %>%
+  mutate(time = str_remove(time, "time_")) %>%
+  select(!rowname) %>%
+  rename(phylo_dist = time, morpho_dist = value) %>%
+  mutate(phylo_dist = as.numeric(phylo_dist))
+
+# test plot: 
+ggplot(morpho_sim_W_2L, aes(x = phylo_dist, y = morpho_dist))+ 
+  geom_point() + 
+  geom_smooth(method = "lm") 
+```
+
+
+
+# Plots
+
+## Sharpening rate (s)
+
+### Just real data
+
+#### Plain diff
+```{r}
+# s-----------------------------
+ggplot(s_3d_phylo, aes(x = phylo_dist, y = s_dist)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  labs(title = "Pairwise distances",
+       subtitle = "S (sharpening rate) distance vs phylogenetic distance",
+       caption = "all data transformed via z-score normalization", 
+       x = "Phylogenetic distance", 
+       y = "S distance"
+       ) + 
+  theme_bw()
+```
+
+#### Diff per diet
+```{r}
+ggplot(s_greater_bm_diet, aes(x = diet.y, y = avg_diff)) +
+  geom_col() + 
+  geom_errorbar(aes(ymin = (avg_diff - stdev), ymax = (avg_diff + stdev)))
+```
+
+### + brownian data
+
+#### Brownian quantile overlay
+```{r}
+ggplot() +
+  geom_point(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist))+
+  geom_smooth(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist), method = 'lm') +
+  geom_point(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3)
+```
+
+#### Brownian trend line overlay 
+```{r}
+ggplot() + 
+  geom_point(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist))+
+  geom_smooth(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist), method = 'lm', color = "black") +
+  geom_point(morpho_sim_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "skyblue", alpha = .25)+
+  geom_smooth(morpho_sim_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "cornflowerblue", method = "lm")
+```
+
+#### Brownian quantile + trend line overlay 
+```{r}
+ggplot() + 
+  geom_point(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist))+
+  geom_smooth(s_3d_phylo, mapping = aes(x = phylo_dist, y = s_dist), method = 'lm', color = "black") +
+  geom_area(bm_s, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) + 
+  geom_point(morpho_sim_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "skyblue", alpha = .25)+
+  geom_smooth(morpho_sim_s, mapping = aes(x = phylo_dist, y = morpho_dist), color = "cornflowerblue", method = "lm")
+```
+
+
+
+## Wc/2Lc
+
+### Just real data
+
+#### Plain diff
+```{r}
+ggplot(W_2L_3d_phylo, aes(x = phylo_dist, y = W_2L_dist)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  labs(title = "Pairwise distances",
+       subtitle = "W/2L distance vs phylogenetic distance",
+       caption = "all data transformed via z-score normalization", 
+       x = "Phylogenetic distance", 
+       y = "W/2L distance"
+       ) + 
+  theme_bw()
+```
+
+#### Diff per diet
+```{r}
+ggplot(W_2L_bm_by_diet, aes(x = diet.y, y = avg_diff)) +
+  geom_col() + 
+  geom_errorbar(aes(ymin = (avg_diff - stdev), ymax = (avg_diff + stdev)))
+```
+
+### + brownian data
+
+#### Brownian quantile overlay
+```{r}
+ggplot() +
+  geom_point(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist))+
+  geom_smooth(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist), method = 'lm') +
+  geom_point(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_line(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "blue") +
+  geom_area(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3)
+```
+
+#### Brownian trend line overlay 
+```{r}
+ggplot() + 
+  geom_point(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist))+
+  geom_smooth(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist), method = 'lm', color = "black") +
+  geom_point(morpho_sim_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "skyblue", alpha = .25)+
+  geom_smooth(morpho_sim_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "cornflowerblue", method = "lm")
+```
+
+#### Brownian quantile + trend line overlay 
+```{r}
+ggplot() + 
+  geom_point(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist))+
+  geom_smooth(W_2L_3d_phylo, mapping = aes(x = phylo_dist, y = W_2L_dist), method = 'lm', color = "black") +
+  geom_area(bm_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), fill = "skyblue", alpha = .3) + 
+  geom_point(morpho_sim_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "skyblue", alpha = .25)+
+  geom_smooth(morpho_sim_W_2L, mapping = aes(x = phylo_dist, y = morpho_dist), color = "cornflowerblue", method = "lm")
+```
+
+
+
