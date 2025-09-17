@@ -36,6 +36,8 @@ library(patchwork)
 library(car)
 library(ggResidpanel)
 library(VGAM)
+library(viridis)
+library(ggtree)
 
 #functions
 bmMLE <- function(phy, x) {
