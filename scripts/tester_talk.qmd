@@ -1,0 +1,545 @@
+---
+title: "Tester Talk 26"
+format: html
+---
+## Basic outline of process
+Pull climatic gradient data
+	- using rainfall and NDVI from Hawaii climate data portal from 3/11/2026
+	  - rainfall metadata: 
+	    Xresolution	0.00225
+      Yresolution	0.00225
+      ExtentXmin	-156.243
+      ExtentXmax	-154.668
+      ExtentYmin	18.849
+      ExtentYmax	20.334
+    - NDVI metadata: 
+    Spatial resolution: 0.05° x 0.05° (about 5600 m, Climate Modeling Grid)
+  - NDVI has much lower resolution than the rainfall data
+Use formula to make probability surface for bird presence
+	- Spectral gp (gaussian process simulation) 
+Sample that bird surface for point and areal data
+	- Use spatstat package in r for simulated point data with function rpoispp 
+	- Areal data is split in to ahapua'a slices
+	  - This data from [HI Statewide GIS program](https://geoportal.hawaii.gov/datasets/ahupuaa/explore?location=19.437569%2C-155.456033%2C9) 
+	  
+Can hve multiple "trials" per ahapua'a, but overall modeled as avg probabiliyt of the slice, ran through some "noise" representing wwhether that observation was recorded
+
+# setup
+
+## Loading packages
+```{r}
+library(tidyverse)
+library(here)
+library(sf)
+library(spectralGP)
+library(spatstat)
+library(terra)
+library(INLA)
+library(Matrix)
+library(lwgeom)
+```
+
+## Loading data
+```{r}
+ahupuaa_raw <- st_read(here("data", "Tester26talk", "Ahupuaa", "Ahupuaa.shp"))
+rainfall <- rast(here("data", "Tester26talk", "HCDP_data", "rainfall_new_month_bi_data_map_2026_03.tif"))
+ndvi <- rast(here("data", "Tester26talk", "HCDP_data", "ndvi_modis_day_bi_data_map_2026_03_01.tif"))
+```
+
+```{r}
+#Take a quick look at the data
+plot(st_geometry(ahupuaa_raw))
+plot(rainfall)
+plot(ndvi)
+```
+
+# Generating and Cleaning data
+
+## Cleaning
+Doesn't look like rainfall and ndvi need to be changed at all, just the ahupuaa layer
+
+```{r}
+#| label: ahupuaa_clip
+
+# clipping the extent of ahupuaa to the extent of the climatic data to remove the extra data :)
+
+# make the coordinate reference systems match
+ahupuaa <- st_transform(ahupuaa_raw, st_crs(rainfall))
+
+# take bounding box of rainfall, intersect with the ahupaa layer
+bbox <- st_bbox(rainfall) %>% 
+  st_as_sfc()
+
+ahupuaa_clip <- st_intersection(ahupuaa, bbox)
+
+# check
+plot(st_geometry(ahupuaa_clip)) # nice!
+```
+
+## Generate species distributions
+Species distributed under gaussian process
+- AKA they prefer a certain rainfall level and ndvi, with that preference level diminishing under a normal distr the further rainfall and ndvi values stray from their preferred level
+Then apply noise to the data? 
+Also, apply a gaussian random field?
+
+```{r}
+#| label: sp_prob_synthesis
+
+# Rainfall ------------------------
+# set the preferred climate for a species (akin to mean), as well as the standard deviation (akin to range of tolerance) arbitrarily lol 
+pref_rainfall <- 600
+tolerance_rainfall <- 200
+
+
+# Apply a Gaussian response curve to raster
+# P(occupancy) = exp(-0.5 * ((x - optimum) / tolerance)^2) - pulled from gaussian curve fn, but removed first normalizing constant so it is always between 0-1
+sp_rain_prob <- app(rainfall, function(x) {
+  exp(-0.5 * ((x - pref_rainfall) / tolerance_rainfall)^2)
+})
+
+names(sp_rain_prob) <- "occupancy_probability"
+
+
+# plot to see 
+plot(sp_rain_prob)
+
+# NDVI -------------------------------------
+# set the preferred climate for a species (akin to mean), as well as the standard deviation (akin to range of tolerance) arbitrarily lol 
+pref_ndvi <- .5
+tolerance_ndvi <- .15
+
+# Apply a Gaussian response curve to raster
+# P(occupancy) = exp(-0.5 * ((x - optimum) / tolerance)^2) - pulled from gaussian curve fn, but removed first normalizing constant so it is always between 0-1
+sp_ndvi_prob <- app(ndvi, function(x) {
+  exp(-0.5 * ((x - pref_ndvi) / tolerance_ndvi)^2)
+})
+
+names(sp_ndvi_prob) <- "occupancy_probability"
+
+
+# plot to see 
+plot(sp_ndvi_prob)
+
+# combined probability ------------------------------------
+prob_sp <- sp_ndvi_prob * sp_rain_prob
+plot(prob_sp)
+
+
+# apply noise -----------------
+
+## #Create a 2D GP object, generate noise 
+# gridsize: should be 2^x
+# using nrow() and ncol() to find resolution of raster
+# for this raster it is 660X700 - 512 (2^9)should be ok to approx 1 node of variation per raster cell? 
+
+gp_noise <- gp(gridsize = c(512, 512),
+               specdens = matern.specdens,
+               specdens.param = c(.2, 4), # c(smoothness, range), larger range = broader spatial correlation
+               variance.param = 0.05) # height of the values p much - set here to .05 cuz it looks like it keeps the vals from -.5 to .5
+
+simulate(gp_noise)  # modifies gp_noise in place, only returns null. don't need 2 put into new object
+
+plot(gp_noise) # check it out! cool :)
+
+# Extract the GP grid coordinates and process values directly
+gp_grid <- getgrid(gp_noise)     # returns list with $x1 and $x2 grid coords, checked they are from 0-1 as should be
+gp_vals <- predict(gp_noise)     # returns process values on the native GP grid
+
+# gp_vals is a matrix of dimensions gridsize x gridsize (e.x. 512x512), the dim will be gridsize/2+1 (257) bc of fourier transformation
+dim(gp_vals)
+
+# Convert to raster, matching extent and CRS of sp prob
+noise_rast <- rast(gp_vals, extent = ext(prob_sp), crs = crs(prob_sp))|>
+  resample(prob_sp, method = "bilinear") # Resample to exactly match probability raster's resolution
+
+
+
+plot(noise_rast) # ok nice noise field looks good 
+
+# Center on 1 for multiplicative noise and apply to sp prob raster
+noise_centered <- noise_rast - global(noise_rast, mean)[[1]] + 1 # take each val, subtract the mean and add 1 
+prob_noisy     <- prob_sp * noise_centered
+
+# Plot to check that worked 
+plot(prob_sp, main = "Original")
+plot(prob_noisy,  main = "With spatialGP noise") # nice! but vals go way above 1, want to keep btwn 0 and 1 right?? 
+
+# making the noisy sp dist normalized to be between 0 and 1
+r_min <- minmax(prob_noisy)[1]
+r_max <- minmax(prob_noisy)[2]
+prob_noisy_norm <- (prob_noisy - r_min) / (r_max - r_min)
+
+plot(prob_noisy_norm)
+```
+
+
+using the spectralGP mapping tool DIDNT WORK :( it would not properly map to the shape of the big island (first red flag) and had weird banding in it (second red flag) so instead I turned gp_grid into a raster and used terra's resample to fit it to the extent of the big island 
+
+## Sample points from species dist
+
+I will generate a set of coords to represent specimen collection. Then, I will clip these points to the extent of the simulated species range raster, then extract the sp occupancy probability as a new column on the points feature. Next, filter the points so that only points with a probability threshold >.25 are "detected" 
+```{r}
+#| label: point-sampling
+
+# first generate the points, these will have coordinates on the unit square 
+# width 6.6 and length 7 to make proportional to data bounds. intensity 6 makes 250 ish points
+
+pp <- rpoispp(7, win = owin(c(0, 6.6), c(0,7)))
+plot(pp) # looks good
+
+
+# convert the units to real coordinates, make into new df
+pp_coord_unit <- data.frame(x = xy2unit(pp[["x"]]), y = xy2unit(pp[["y"]]))
+
+plot(pp_coord_unit) # ok nice converted to unit square
+
+# Extract the real extent of your raster
+ext_prob <- ext(prob_sp)  # gives xmin, xmax, ymin, ymax
+
+xmin <- ext_prob$xmin
+xmax <- ext_prob$xmax
+ymin <- ext_prob$ymin
+ymax <- ext_prob$ymax
+
+# Extract the unit square coordinates
+unit_coords <- cbind(pp_coord_unit$x, pp_coord_unit$y)
+
+# Rescale to real coordinates
+real_coords <- cbind(
+  x = unit_coords[, 1] * (xmax - xmin) + xmin,
+  y = unit_coords[, 2] * (ymax - ymin) + ymin
+)
+
+plot(real_coords) # ok looking good
+
+# now clip points only to those on land ---------------------------
+
+pts <- vect(as.data.frame(real_coords),
+            geom = c("x", "y"),
+            crs  = crs(prob_noisy_norm))
+
+# Extract raster values at point locations
+extracted <- terra::extract(prob_noisy_norm, pts)
+# Keep only points that fall within the raster (non-NA values)
+pts_clipped <- pts[!is.na(extracted[, 2]), ]
+# i tried using join but it isn't working :( so I do this instead
+extracted_clean <- drop_na(extracted, occupancy_probability)
+# Add the extracted values as a new attribute column to the SpatVector
+pts_clipped$occupancy_probability <- extracted_clean[ , 2]
+
+# check the pts are in the right spot (over land only)
+plot(prob_noisy_norm)
+plot(pts_clipped, add = TRUE, col = "red", cex = 0.5) # nice! 
+
+# remove some points based on their occupany probability -----------------
+pts_clipped$occupancy_probability # first check what the values might be - make sure the spread is good 
+sample_pts <- pts_clipped[pts_clipped$occupancy_probability > 0.25, ]
+sample_pts$occupancy_probability # nice! worked as intended
+sample_pts$occupancy_probability <- NULL # now delete the prob value so we can make sure it is not going to affect our model
+
+# check pts look like theyre only in high prob areas
+length(sample_pts)
+plot(prob_noisy_norm)
+plot(sample_pts, add = TRUE, col = "red", cex = 0.5) 
+```
+
+## sample area from sp dist
+```{r}
+#| label: areal-sampling
+
+plot(st_geometry(ahupuaa_clip)) # there's a lot of rly big ahupuaas, maybe I should cut up by wao
+
+prob_ahupuaa <- terra::extract(prob_noisy_norm, ahupuaa_clip, mean, bind = TRUE) # extract mean occ prob for each ahupuaa
+
+prob_ahupuaa$occupancy_probability <- ifelse(prob_ahupuaa$occupancy_probability > 0.1, 1, 0) # then make it so if the mean prob is >.1, then it has been observed here. otherwise not. 
+
+length(prob_ahupuaa$occupancy_probability)
+
+```
+
+Alright, now I have the data I need to build the model. 
+
+# Building the model
+
+general structure of the model: 
+
+Level 1 (Likelihood):
+  Point observations  ~ Poisson point process(λ(s))   # intensity surface
+  Polygon observations ~ Binomial(n, mean(p(s)))       # aggregated occupancy
+
+Level 2 (Process):
+  log(λ(s)) = β0 + β1 * rainfall(s) * ndvi(s) + w(s)           # log intensity
+  logit(p(s)) = α0 + α1 * rainfall(s) * ndvi(s) + w(s)         # shared spatial effect
+
+Level 3 (Priors):
+  β0, β1, α0, α1 ~ Normal(0, 1)
+  w(s) ~ GP(0, Matern covariance)                     # shared spatial random effect
+
+
+```{r}
+# Prepare data
+
+# point data ----------------------------------
+# Extract rainfall and NDVI at presence point locations
+pts_obs_df          <- as.data.frame(sample_pts, geom = "XY")
+pts_obs_df$rainfall <- extract(rainfall, sample_pts)[, 2]
+pts_obs_df$ndvi <- extract(ndvi, sample_pts)[, 2]
+
+# Prepare polygon data ------------------------
+
+poly_sf <- st_as_sf(prob_ahupuaa) # make sure it is an sf rather than spatvector
+
+# Sample integration points within each polygon and average rainfall
+n_integration <- 25   # adjust based on polygon size and desired accuracy
+
+poly_integration <- lapply(1:nrow(poly_sf), function(i) {
+  pts <- st_sample(poly_sf[i, ], size = n_integration, type = "regular")
+  # st_sample may return fewer points than requested for small polygons
+  # fall back to centroid if no points returned
+  if (length(pts) == 0) {
+    pts <- st_centroid(poly_sf[i, ])
+  }
+  st_coordinates(pts)
+})
+
+# Average rainfall covariate over each polygon
+poly_sf$rainfall_avg <- sapply(poly_integration, function(pts) {
+  pts_vect <- vect(as.data.frame(pts),
+                   geom = c("X", "Y"),
+                   crs  = crs(rainfall))
+  mean(extract(rainfall, pts_vect)[, 2], na.rm = TRUE)
+})
+
+# Average ndvi covariate over each polygon
+poly_sf$ndvi_avg <- sapply(poly_integration, function(pts) {
+  pts_vect <- vect(as.data.frame(pts),
+                   geom = c("X", "Y"),
+                   crs  = crs(rainfall))
+  mean(extract(ndvi, pts_vect)[, 2], na.rm = TRUE)
+})
+```
+
+
+```{r}
+# Prepare mesh
+# Include presence points and polygon integration points in mesh
+poly_all_coords <- do.call(rbind, poly_integration)
+
+all_coords <- rbind(
+  as.matrix(pts_obs_df[, c("x", "y")]),
+  poly_all_coords
+) # make into mnatrix
+
+sum(duplicated(all_coords)) # Check all_coords for duplicates to make sure mesh doesn't implode
+
+# Rebuild mesh with explicit boundary and coordinates in degrees
+# max.edge should be in degrees for WGS84 — 0.1 degrees ~ 11km
+mesh <- inla.mesh.2d(
+  loc      = all_coords,
+  max.edge = c(0.05, 0.2),   # inner and outer edge length in degrees
+  cutoff   = 0.01,            # minimum distance between nodes in degrees
+  offset   = c(0.1, 0.3)     # inner and outer boundary extension in degrees
+)
+
+# Check mesh looks right
+plot(mesh)
+plot(st_geometry(poly_sf), add = TRUE, border = "red")
+points(pts_obs_df$x, pts_obs_df$y, pch = 20, col = "blue", cex = 0.5)
+
+# build SPDE with mesh --------
+spde <- inla.spde2.matern(mesh  = mesh,
+                           alpha = 2)
+
+```
+
+```{r}
+# log-gaussian cox process calc
+# calculate  LGCP integration weights ---
+mesh_coords_sf <- st_as_sf(as.data.frame(mesh$loc[, 1:2]),
+                             coords = c("V1", "V2"),
+                             crs    = 4326)
+
+mesh_voronoi <- st_voronoi(st_union(mesh_coords_sf),
+                            envelope = st_convex_hull(st_union(mesh_coords_sf)))
+mesh_voronoi <- st_collection_extract(mesh_voronoi, "POLYGON")
+mesh_voronoi <- st_make_valid(mesh_voronoi)
+
+sf_use_s2(FALSE)
+
+voronoi_centroids <- st_centroid(mesh_voronoi)
+node_match        <- st_nearest_feature(mesh_coords_sf, voronoi_centroids)
+mesh_voronoi      <- mesh_voronoi[node_match]
+
+weights <- sapply(1:length(mesh_voronoi), function(i) {
+  cell <- tryCatch(
+    st_intersection(st_sfc(mesh_voronoi[i], crs = 4326), study_area),
+    error = function(e) NULL
+  )
+  if (!is.null(cell) && length(cell) > 0) as.numeric(st_area(cell)) else 0
+})
+
+# make LGCP stack ----------------------------------
+n_pts    <- nrow(pts_obs_df)
+n_mesh   <- nrow(mesh$loc)
+
+y_lgcp   <- c(rep(1, n_pts), rep(0, n_mesh))
+e_lgcp   <- c(rep(0, n_pts), weights)
+
+mesh_pts      <- vect(as.data.frame(mesh$loc[, 1:2]),
+                       geom = c("V1", "V2"),
+                       crs  = crs(rainfall)) # use coord system of one of the layers (should all b same anyway)
+
+# extract env variable values at mesh nodes
+rainfall_mesh <- extract(rainfall, mesh_pts)[, 2]
+rainfall_mesh[is.na(rainfall_mesh)] <- mean(pts_obs_df$rainfall, na.rm = TRUE)
+
+ndvi_mesh <- extract(ndvi, mesh_pts)[, 2]
+ndvi_mesh[is.na(ndvi_mesh)] <- mean(pts_obs_df$ndvi, na.rm = TRUE)
+
+rainfall_lgcp <- c(pts_obs_df$rainfall, rainfall_mesh)
+ndvi_lgcp <- c(pts_obs_df$ndvi, ndvi_mesh)
+
+A_lgcp <- rbind(
+  inla.spde.make.A(mesh, loc = as.matrix(pts_obs_df[, c("x", "y")])),
+  Diagonal(n_mesh)
+)
+
+# make inla stack 
+stack_lgcp <- inla.stack(
+  data    = list(y = y_lgcp,
+                 e = e_lgcp),
+  A       = list(A_lgcp, 1),
+  effects = list(
+    list(spatial   = 1:spde$n.spde),
+    list(intercept = 1,
+         rainfall  = rainfall_lgcp,
+         ndvi      = ndvi_lgcp)      
+  ),
+  tag = "lgcp"
+)
+
+# Polygon stack --------------------------------
+A_poly_list <- lapply(poly_integration, function(pts) {
+  if (nrow(pts) == 0) return(NULL)
+  A_i <- inla.spde.make.A(mesh, loc = pts)
+  Matrix::Matrix(Matrix::colMeans(A_i), nrow = 1)
+})
+
+# make sure everything is here and there aren't any nulls
+valid_poly  <- !sapply(A_poly_list, is.null)
+A_poly_avg  <- do.call(rbind, A_poly_list[valid_poly])
+poly_sf_fit <- poly_sf[valid_poly, ]
+
+stack_poly <- inla.stack(
+  data    = list(y = poly_sf_fit$occupancy_probability,
+                 e = rep(1, nrow(poly_sf_fit))),
+  A       = list(A_poly_avg, 1),
+  effects = list(
+    list(spatial  = 1:spde$n.spde),
+    list(intercept = 1,
+         rainfall  = poly_sf_fit$rainfall_avg,
+         ndvi      = poly_sf_fit$ndvi_avg)    
+  ),
+  tag = "polygon"
+)
+```
+
+
+```{r}
+# Get the combined data from the stack
+stack_all <- inla.stack(stack_lgcp, stack_poly)
+stack_data <- inla.stack.data(stack_all)
+
+# Total number of observations
+n_total <- length(stack_data$y)
+n_lgcp  <- length(y_lgcp)
+n_poly  <- nrow(poly_sf_fit)
+
+# Create response matrix with one column per likelihood
+# NAs tell INLA to ignore that observation for that likelihood
+y_matrix <- matrix(NA, nrow = n_total, ncol = 2)
+colnames(y_matrix) <- c("y_lgcp", "y_poly")
+
+# Fill in LGCP responses (first rows)
+y_matrix[1:n_lgcp, 1] <- y_lgcp
+
+# Fill in polygon responses (remaining rows)
+y_matrix[(n_lgcp + 1):n_total, 2] <- stack_data$y[(n_lgcp + 1):n_total]
+
+stack_all <- inla.stack(stack_lgcp, stack_poly)
+```
+
+
+```{r}
+#| label: model
+
+# this is what claude gave me - I don't agree 
+#formula <- y ~ -1 + intercept + rainfall + ndvi + f(spatial, model = spde) 
+# why does it have a -1 intercept? why is intercept a predictor?? the f() is for choosing the random effect, i think??
+
+# Based on what I learned, this is what I think the formula should be
+formula <- y ~ rainfall + ndvi + f(____, model = "besag") + f(_____, model = "iid") 
+# rainfall and ndvi are predictors, f( model = "besag") is for spatial random effect and f( model = "iid") is for the unstructured random effect
+
+# Refit model with response matrix
+model <- inla(formula,
+              family            = c("poisson", "binomial"),
+              data              = c(list(y = y_matrix), stack_data),
+              E                 = stack_data$e,
+              control.predictor = list(A       = inla.stack.A(stack_all),
+                                       compute = TRUE),
+              control.compute   = list(dic  = TRUE,
+                                       waic = TRUE))
+
+summary(model)
+```
+
+
+```{r}
+ 
+# Project predictions back to raster ---
+raster_coords        <- as.data.frame(prob_noisy_norm, xy = TRUE, na.rm = TRUE)
+rainfall_pred        <- extract(rainfall,
+                                 vect(raster_coords,
+                                      geom = c("x", "y"),
+                                      crs  = crs(rainfall)))[, 2]
+ndvi_pred <- extract(ndvi,
+                      vect(raster_coords,
+                           geom = c("x", "y"),
+                           crs  = crs(ndvi)))[, 2]
+
+
+
+A_pred               <- inla.spde.make.A(mesh,
+                                          loc = as.matrix(raster_coords[, c("x", "y")]))
+spatial_mean         <- model$summary.random$spatial$mean
+
+pred_vals <- model$summary.fixed["intercept", "mean"] +
+             model$summary.fixed["rainfall",  "mean"] * rainfall_pred +
+             model$summary.fixed["ndvi",      "mean"] * ndvi_pred +
+             as.vector(A_pred %*% spatial_mean)
+
+raster_coords$pred_intensity <- exp(pred_vals)      # LGCP intensity surface
+raster_coords$pred_prob      <- plogis(pred_vals)   # occupancy probability
+
+# Also extract posterior uncertainty (standard deviation)
+spatial_sd           <- model$summary.random$spatial$sd
+pred_sd              <- as.vector(A_pred %*% spatial_sd)
+raster_coords$pred_sd <- pred_sd
+
+# Convert to rasters
+intensity_rast <- rast(raster_coords[, c("x", "y", "pred_intensity")],
+                        crs = crs(prob_noisy_norm))
+prob_rast      <- rast(raster_coords[, c("x", "y", "pred_prob")],
+                        crs = crs(prob_noisy_norm))
+sd_rast        <- rast(raster_coords[, c("x", "y", "pred_sd")],
+                        crs = crs(prob_noisy_norm))
+
+# Plot
+par(mfrow = c(1, 3))
+plot(intensity_rast, main = "Predicted intensity (LGCP)")
+plot(prob_rast,      main = "Predicted occupancy probability")
+plot(sd_rast,        main = "Posterior uncertainty (SD)")
+```
+
+
