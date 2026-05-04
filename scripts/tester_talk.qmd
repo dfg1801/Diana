@@ -19,9 +19,13 @@ Use formula to make probability surface for bird presence
 	- Spectral gp (gaussian process simulation) 
 Sample that bird surface for point and areal data
 	- Use spatstat package in r for simulated point data with function rpoispp 
-	- Areal data is split in to ahapua'a slices
-	  - This data from [HI Statewide GIS program](https://geoportal.hawaii.gov/datasets/ahupuaa/explore?location=19.437569%2C-155.456033%2C9) 
-	  
+	- Areal data is split in to moku, which are further split into wao
+	  - Moku data from [HI Statewide GIS program](https://geoportal.hawaii.gov/datasets/HiStateGIS::moku/about) 
+	  - Wao are approximated by elevation
+	    - elevation taken from [HI Statewide GIS program](https://geoportal.hawaii.gov/datasets/HiStateGIS::hawaii-elevation-contours-100ft/about) 
+	    
+	    
+	    
 Can hve multiple "trials" per ahapua'a, but overall modeled as avg probabiliyt of the slice, ran through some "noise" representing wwhether that observation was recorded
 
 # setup
@@ -41,14 +45,14 @@ library(lwgeom)
 
 ## Loading data
 ```{r}
-ahupuaa_raw <- st_read(here("data", "Tester26talk", "Ahupuaa", "Ahupuaa.shp"))
+moku <- st_read(here("data", "Tester26talk", "moku_cut.shp"))
 rainfall <- rast(here("data", "Tester26talk", "HCDP_data", "rainfall_new_month_bi_data_map_2026_03.tif"))
 ndvi <- rast(here("data", "Tester26talk", "HCDP_data", "ndvi_modis_day_bi_data_map_2026_03_01.tif"))
 ```
 
 ```{r}
 #Take a quick look at the data
-plot(st_geometry(ahupuaa_raw))
+plot(st_geometry(moku))
 plot(rainfall)
 plot(ndvi)
 ```
@@ -64,7 +68,7 @@ Doesn't look like rainfall and ndvi need to be changed at all, just the ahupuaa 
 # clipping the extent of ahupuaa to the extent of the climatic data to remove the extra data :)
 
 # make the coordinate reference systems match
-ahupuaa <- st_transform(ahupuaa_raw, st_crs(rainfall))
+ahupuaa <- st_transform(moku, st_crs(rainfall))
 
 # take bounding box of rainfall, intersect with the ahupaa layer
 bbox <- st_bbox(rainfall) %>% 
@@ -87,14 +91,14 @@ Also, apply a gaussian random field?
 
 # Rainfall ------------------------
 # set the preferred climate for a species (akin to mean), as well as the standard deviation (akin to range of tolerance) arbitrarily lol 
-pref_rainfall <- 600
-tolerance_rainfall <- 200
+pref_rainfall <- 600 # mean of dist
+tolerance_rainfall <- 100 # sd of dist
 
 
 # Apply a Gaussian response curve to raster
-# P(occupancy) = exp(-0.5 * ((x - optimum) / tolerance)^2) - pulled from gaussian curve fn, but removed first normalizing constant so it is always between 0-1
+# P(occupancy) = exp(-2 * ((x - mean) / 2sd^2)^2) - pulled from gaussian curve fn, but removed first normalizing constant so it is always between 0-1
 sp_rain_prob <- app(rainfall, function(x) {
-  exp(-0.5 * ((x - pref_rainfall) / tolerance_rainfall)^2)
+  exp(-1 * (((x - pref_rainfall)^2) /((2*tolerance_rainfall)^2)))
 })
 
 names(sp_rain_prob) <- "occupancy_probability"
@@ -104,14 +108,14 @@ names(sp_rain_prob) <- "occupancy_probability"
 plot(sp_rain_prob)
 
 # NDVI -------------------------------------
-# set the preferred climate for a species (akin to mean), as well as the standard deviation (akin to range of tolerance) arbitrarily lol 
-pref_ndvi <- .5
-tolerance_ndvi <- .15
+# set the preferred climate for a species (mean), as well as the standard deviation (akin to range of tolerance) arbitrarily lol 
+pref_ndvi <- .6 # mean
+tolerance_ndvi <- .1 # sd
 
 # Apply a Gaussian response curve to raster
 # P(occupancy) = exp(-0.5 * ((x - optimum) / tolerance)^2) - pulled from gaussian curve fn, but removed first normalizing constant so it is always between 0-1
 sp_ndvi_prob <- app(ndvi, function(x) {
-  exp(-0.5 * ((x - pref_ndvi) / tolerance_ndvi)^2)
+  exp(-1 * (((x - pref_ndvi)^2) /((2*tolerance_ndvi)^2)))
 })
 
 names(sp_ndvi_prob) <- "occupancy_probability"
@@ -119,11 +123,13 @@ names(sp_ndvi_prob) <- "occupancy_probability"
 
 # plot to see 
 plot(sp_ndvi_prob)
+```
 
+
+```{r}
 # combined probability ------------------------------------
 prob_sp <- sp_ndvi_prob * sp_rain_prob
 plot(prob_sp)
-
 
 # apply noise -----------------
 
@@ -141,9 +147,9 @@ simulate(gp_noise)  # modifies gp_noise in place, only returns null. don't need 
 
 plot(gp_noise) # check it out! cool :)
 
-# Extract the GP grid coordinates and process values directly
+# Extract the GP grid coordinates and values directly
 gp_grid <- getgrid(gp_noise)     # returns list with $x1 and $x2 grid coords, checked they are from 0-1 as should be
-gp_vals <- predict(gp_noise)     # returns process values on the native GP grid
+gp_vals <- predict(gp_noise)     # returns values on the native GP grid
 
 # gp_vals is a matrix of dimensions gridsize x gridsize (e.x. 512x512), the dim will be gridsize/2+1 (257) bc of fourier transformation
 dim(gp_vals)
@@ -151,8 +157,6 @@ dim(gp_vals)
 # Convert to raster, matching extent and CRS of sp prob
 noise_rast <- rast(gp_vals, extent = ext(prob_sp), crs = crs(prob_sp))|>
   resample(prob_sp, method = "bilinear") # Resample to exactly match probability raster's resolution
-
-
 
 plot(noise_rast) # ok nice noise field looks good 
 
